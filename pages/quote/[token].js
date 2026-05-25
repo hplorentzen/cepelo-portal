@@ -276,8 +276,33 @@ export default function QuotePage({ quote }) {
 }
 
 export async function getServerSideProps({ params, query }) {
-  const { data: quote, error } = await supabase.from('quotes').select('*').eq('token', params.token).single()
-  if (error || !quote) return { props: { quote: null } }
+  const { createClient } = await import('@supabase/supabase-js')
+  const adminClient = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+  )
+
+  const { data: quote, error } = await adminClient
+    .from('quotes')
+    .select('*')
+    .eq('token', params.token)
+    .single()
+
+  if (error) {
+    console.error('[quote/getServerSideProps] Supabase error:', {
+      token: params.token,
+      message: error.message,
+      code: error.code,
+      status: error.status,
+    })
+    return { props: { quote: null } }
+  }
+
+  if (!quote) {
+    console.error('[quote/getServerSideProps] No quote found for token:', params.token)
+    return { props: { quote: null } }
+  }
+
   if (query.view === 'customer') quote.type = 'customer'
   return { props: { quote } }
 }
