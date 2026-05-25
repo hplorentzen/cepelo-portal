@@ -276,32 +276,28 @@ export default function QuotePage({ quote }) {
 }
 
 export async function getServerSideProps({ params, query }) {
-  const { createClient } = await import('@supabase/supabase-js')
-  const adminClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  )
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-  const { data: quote, error } = await adminClient
+  console.log('[getServerSideProps] token:', params.token)
+  console.log('[getServerSideProps] SUPABASE_URL set:', !!url, url?.slice(0, 30))
+  console.log('[getServerSideProps] SERVICE_ROLE_KEY set:', !!key, key?.slice(0, 10))
+
+  const { createClient } = await import('@supabase/supabase-js')
+  const adminClient = createClient(url, key)
+
+  const { data: quote, error, status, statusText } = await adminClient
     .from('quotes')
     .select('*')
     .eq('token', params.token)
     .single()
 
-  if (error) {
-    console.error('[quote/getServerSideProps] Supabase error:', {
-      token: params.token,
-      message: error.message,
-      code: error.code,
-      status: error.status,
-    })
-    return { props: { quote: null } }
-  }
+  console.log('[getServerSideProps] Supabase response status:', status, statusText)
+  console.log('[getServerSideProps] error:', JSON.stringify(error))
+  console.log('[getServerSideProps] data:', JSON.stringify(quote)?.slice(0, 100))
 
-  if (!quote) {
-    console.error('[quote/getServerSideProps] No quote found for token:', params.token)
-    return { props: { quote: null } }
-  }
+  if (error) return { props: { quote: null } }
+  if (!quote) return { props: { quote: null } }
 
   if (query.view === 'customer') quote.type = 'customer'
   return { props: { quote } }
