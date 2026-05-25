@@ -8,10 +8,11 @@ const adminClient = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
-const PLYTIX_BASE = 'https://pim.plytix.com/api/v1'
+const PLYTIX_AUTH_URL = 'https://auth.plytix.com/auth/api/get-token'
+const PLYTIX_BASE     = 'https://pim.plytix.com/api/v1'
 
 async function getPlytixToken() {
-  const res = await fetch(`${PLYTIX_BASE}/auth/token`, {
+  const res = await fetch(PLYTIX_AUTH_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -27,16 +28,16 @@ async function getPlytixToken() {
 }
 
 async function fetchProductBySku(token, sku) {
-  // Search by SKU to get the product id
-  const searchRes = await fetch(`${PLYTIX_BASE}/products`, {
+  // Search by SKU — filters is an array of OR-groups, each group is an array of AND-conditions
+  const searchRes = await fetch(`${PLYTIX_BASE}/products/search`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`,
     },
     body: JSON.stringify({
-      filters: [{ field: 'sku', value: sku }],
-      pagination: { size: 1, page: 1 },
+      filters: [[{ field: 'sku', operator: 'eq', value: sku }]],
+      pagination: { page: 1, page_size: 1 },
     }),
   })
   if (!searchRes.ok) throw new Error(`Plytix product search failed: ${searchRes.status}`)

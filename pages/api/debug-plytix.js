@@ -1,4 +1,5 @@
-const PLYTIX_BASE = 'https://pim.plytix.com/api/v1'
+const PLYTIX_AUTH_URL = 'https://auth.plytix.com/auth/api/get-token'
+const PLYTIX_BASE     = 'https://pim.plytix.com/api/v1'
 
 export default async function handler(req, res) {
   const { sku = 'CEP028' } = req.query
@@ -14,7 +15,7 @@ export default async function handler(req, res) {
   // Step 1: auth
   let token
   try {
-    const authRes = await fetch(`${PLYTIX_BASE}/auth/token`, {
+    const authRes = await fetch(PLYTIX_AUTH_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_key: apiKey, api_password: apiPassword }),
@@ -32,10 +33,10 @@ export default async function handler(req, res) {
 
   // Step 2: search by SKU
   try {
-    const searchRes = await fetch(`${PLYTIX_BASE}/products`, {
+    const searchRes = await fetch(`${PLYTIX_BASE}/products/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ filters: [{ field: 'sku', value: sku }], pagination: { size: 1, page: 1 } }),
+      body: JSON.stringify({ filters: [[{ field: 'sku', operator: 'eq', value: sku }]], pagination: { page: 1, page_size: 1 } }),
     })
     const searchBody = await searchRes.json()
     result.searchStatus = searchRes.status
