@@ -9,16 +9,16 @@ export default async function handler(req, res) {
   }
 
   const supabase = createClient(url, key)
-  const { count, error } = await supabase
+  const response = await supabase
     .from('quotes')
     .select('*', { count: 'exact', head: true })
 
-  if (error) {
-    return res.status(500).json({
-      raw: JSON.parse(JSON.stringify(error, Object.getOwnPropertyNames(error))),
-      supabaseUrl: url.slice(0, 30),
-    })
-  }
-
-  return res.status(200).json({ count })
+  return res.status(200).json({
+    count: response.count,
+    status: response.status,
+    statusText: response.statusText,
+    error: response.error
+      ? JSON.parse(JSON.stringify(response.error, Object.getOwnPropertyNames(response.error)))
+      : null,
+  })
 }
