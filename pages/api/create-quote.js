@@ -1,6 +1,11 @@
 // pages/api/create-quote.js
-import { supabase } from '../../lib/supabase'
+import { createClient } from '@supabase/supabase-js'
 import { randomBytes } from 'crypto'
+
+const adminClient = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
@@ -21,7 +26,7 @@ export default async function handler(req, res) {
     const validUntil = new Date()
     validUntil.setDate(validUntil.getDate() + valid_days)
 
-    const { data: quote, error } = await supabase.from('quotes').insert({
+    const { data: quote, error } = await adminClient.from('quotes').insert({
       token,
       shopify_order_id: shopify_draft_order_id,
       type: req.body.type || 'dealer',
