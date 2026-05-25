@@ -10,13 +10,16 @@ export default function QuotePage({ quote }) {
   const tr = getT(lang)
   const isDealer = quote?.type === 'dealer'
   const [mainGross, setMainGross] = useState(quote?.main_product?.gross_price || 0)
-  const [lineGross, setLineGross] = useState((quote?.line_items || []).map(i => i.gross_price || 0))
+  const [lineGross, setLineGross] = useState((quote?.line_items || []).map(i => (i.gross_price || 0) * (i.quantity || 1)))
   const [selectedAccessories, setSelectedAccessories] = useState([])
 
   useEffect(() => {
-    if (!quote?.token) return
-    supabase.from('quotes').update({ opened_at: new Date().toISOString() }).eq('token', quote.token).then(() => {})
-  }, [quote?.token])
+    // Dealer view: match by token; Customer view: match by customer_token (dealer token is not exposed)
+    const col = quote?.token ? 'token' : 'customer_token'
+    const key = quote?.token || quote?.customer_token
+    if (!key) return
+    supabase.from('quotes').update({ opened_at: new Date().toISOString() }).eq(col, key).then(() => {})
+  }, [quote?.token, quote?.customer_token])
 
   if (!quote) return (
     <div style={{ fontFamily: 'Barlow, sans-serif', padding: 40, textAlign: 'center', color: '#333' }}>
@@ -57,14 +60,15 @@ export default function QuotePage({ quote }) {
   }
 
   const handleAccept = async () => {
-    await supabase.from('quotes').update({ accepted_at: new Date().toISOString(), status: 'accepted' }).eq('token', quote.token)
+    // Customer always accesses via customer_token; match by that column
+    await supabase.from('quotes').update({ accepted_at: new Date().toISOString(), status: 'accepted' }).eq('customer_token', quote.customer_token)
     alert(lang === 'no' ? 'Tilbudet er akseptert!' : lang === 'is' ? 'Tilboðið hefur verið samþykkt!' : 'Tilbuddet er accepteret!')
   }
 
   return (
     <>
       <Head>
-        <title>{tr.quote} #{quote.token?.slice(-6).toUpperCase()}</title>
+        <title>{tr.quote} #{(quote.token || quote.customer_token)?.slice(-6).toUpperCase()}</title>
         <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=Barlow+Condensed:wght@300;400;600&display=swap" rel="stylesheet" />
       </Head>
       <style>{`
@@ -79,6 +83,7 @@ export default function QuotePage({ quote }) {
         .dealer .dot{background:var(--dealer-bg)} .customer .dot{background:var(--blue)}
         .quote-header{display:grid;grid-template-columns:1fr auto;align-items:start;gap:32px;padding-bottom:36px;border-bottom:1px solid var(--border);margin-bottom:40px}
         .tagline{font-size:12px;color:var(--ink-muted);letter-spacing:.08em;text-transform:uppercase;margin-top:4px}
+        .header-dealer{font-size:12px;color:var(--ink-light);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
         .quote-meta{text-align:right}
         .quote-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:6px}
         .quote-number{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:300}
@@ -167,12 +172,17 @@ export default function QuotePage({ quote }) {
 
         <div className="quote-header">
           <div>
-            <img src="data:image/png;base64,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" alt="CEPELO" style={{height:40,display:'block',marginBottom:6}} />
+            <img src="https://cepelo.dk/cdn/shop/files/CEPELO_logo_CMYK.png" alt="CEPELO" style={{height:40,display:'block',marginBottom:6}} />
             <div className="tagline">{tr.tagline}</div>
+            {isDealer && quote.dealer_name && <div className="header-dealer">
+              <strong>{quote.dealer_name}</strong>
+              {quote.dealer_email && <> · {quote.dealer_email}</>}
+              {quote.dealer_phone && <> · {quote.dealer_phone}</>}
+            </div>}
           </div>
           <div className="quote-meta">
             <div className="quote-label">{tr.quote}</div>
-            <div className="quote-number">#{quote.token?.slice(-6).toUpperCase()}</div>
+            <div className="quote-number">#{(quote.token || quote.customer_token)?.slice(-6).toUpperCase()}</div>
             <div className="quote-date">{dateStr(new Date().toISOString())}</div>
             {quote.valid_until && <div className="valid-until">{tr.validUntil} {dateStr(quote.valid_until)}</div>}
           </div>
@@ -318,7 +328,7 @@ export default function QuotePage({ quote }) {
           <p>{tr.forwardDesc}</p>
           <div className="tools-row">
             <button className="btn btn-primary" onClick={() => window.print()}>🖨 {tr.printCopy}</button>
-            <button className="btn btn-secondary" onClick={() => { navigator.clipboard.writeText(window.location.origin + '/quote/' + quote.token + '?view=customer'); alert('Link kopieret!') }}>🔗 {tr.copyLink}</button>
+            <button className="btn btn-secondary" onClick={() => { navigator.clipboard.writeText(window.location.origin + '/quote/' + quote.customer_token); alert('Link kopieret!') }}>🔗 {tr.copyLink}</button>
           </div>
         </div>}
 
@@ -341,30 +351,35 @@ export default function QuotePage({ quote }) {
   )
 }
 
-export async function getServerSideProps({ params, query }) {
+export async function getServerSideProps({ params }) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  console.log('[getServerSideProps] token:', params.token)
-  console.log('[getServerSideProps] SUPABASE_URL set:', !!url, url?.slice(0, 30))
-  console.log('[getServerSideProps] SERVICE_ROLE_KEY set:', !!key, key?.slice(0, 10))
 
   const { createClient } = await import('@supabase/supabase-js')
   const adminClient = createClient(url, key)
 
-  const { data: quote, error, status, statusText } = await adminClient
+  // ── 1. Try dealer token ──────────────────────────────────────────────────
+  const { data: dealerQuote, error: dealerError } = await adminClient
     .from('quotes')
     .select('*')
     .eq('token', params.token)
     .single()
 
-  console.log('[getServerSideProps] Supabase response status:', status, statusText)
-  console.log('[getServerSideProps] error:', JSON.stringify(error))
-  console.log('[getServerSideProps] data:', JSON.stringify(quote)?.slice(0, 100))
+  if (!dealerError && dealerQuote) {
+    // Dealer access — return full row including customer_token (dealer needs it to share the link)
+    return { props: { quote: dealerQuote } }
+  }
 
-  if (error) return { props: { quote: null } }
-  if (!quote) return { props: { quote: null } }
+  // ── 2. Try customer token ────────────────────────────────────────────────
+  const { data: custQuote, error: custError } = await adminClient
+    .from('quotes')
+    .select('*')
+    .eq('customer_token', params.token)
+    .single()
 
-  if (query.view === 'customer') quote.type = 'customer'
-  return { props: { quote } }
+  if (custError || !custQuote) return { props: { quote: null } }
+
+  // Customer access — strip the dealer token so customers cannot derive the dealer URL
+  const { token: _dealerToken, ...safeQuote } = custQuote
+  return { props: { quote: { ...safeQuote, type: 'customer' } } }
 }

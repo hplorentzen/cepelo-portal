@@ -81,12 +81,14 @@ export default async function handler(req, res) {
     }
 
     // ── 3. Insert quote into Supabase ──────────────────────────────────────
-    const token = randomBytes(16).toString('hex')
+    const token          = randomBytes(16).toString('hex')
+    const customer_token = randomBytes(16).toString('hex')
     const validUntil = new Date()
     validUntil.setDate(validUntil.getDate() + valid_days)
 
     const { data: quote, error } = await adminClient.from('quotes').insert({
       token,
+      customer_token,
       shopify_order_id:      shopify_draft_order_id,
       type:                  req.body.type     || 'dealer',
       lang:                  req.body.lang     || 'da',
@@ -110,14 +112,14 @@ export default async function handler(req, res) {
 
     if (error) throw new Error(`Supabase error: ${error.message}`)
 
-    const baseUrl  = process.env.NEXT_PUBLIC_BASE_URL
-    const quoteUrl = `${baseUrl}/quote/${token}`
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
     return res.status(200).json({
       success:               true,
       token,
-      quote_url:             quoteUrl,
-      customer_url:          `${quoteUrl}?view=customer`,
+      customer_token,
+      quote_url:             `${baseUrl}/quote/${token}`,
+      customer_url:          `${baseUrl}/quote/${customer_token}`,
       shopify_enriched:      !!shopifyProduct,
       recommendations_count: availableAccessories.filter(a => a.type === 'product').length,
     })
