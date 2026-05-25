@@ -2,23 +2,18 @@ import { createClient } from '@supabase/supabase-js'
 
 export default async function handler(req, res) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!url || !key) {
-    return res.status(500).json({ error: 'Missing env vars', url: !!url, key: !!key })
+    return res.status(500).json({ error: 'Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY' })
   }
 
   const supabase = createClient(url, key)
-  const response = await supabase
+  const { count, error } = await supabase
     .from('quotes')
     .select('*', { count: 'exact', head: true })
 
-  return res.status(200).json({
-    count: response.count,
-    status: response.status,
-    statusText: response.statusText,
-    error: response.error
-      ? JSON.parse(JSON.stringify(response.error, Object.getOwnPropertyNames(response.error)))
-      : null,
-  })
+  if (error) return res.status(500).json({ error: error.message })
+
+  return res.status(200).json({ count })
 }
