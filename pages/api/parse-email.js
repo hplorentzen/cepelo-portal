@@ -119,19 +119,25 @@ function parseSubject(subject = '') {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Line item parser
-// Two-pass strategy:
-//   Pass 1 – table-row based (precise: td cells give name / sku / price columns)
-//   Pass 2 – text-window based (fallback for non-table or deeply nested layouts)
+//
+// Uses an HTML-context-window approach: locate each "SKU: XXX" occurrence in
+// the raw HTML, grab ±800 chars of surrounding HTML, strip it to text, then
+// extract name / quantity / price from that text block.
+//
+// This is more robust than parsing <tr> elements because Shopify emails use
+// nested tables — the SKU lives in an inner <td> while the price is in a
+// sibling <td> of the outer <tr>. Simple <tr> matching only captures the inner
+// row and misses the price.  Context-window grabs both.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SKU_RE    = /\bSKU\s*:?\s*([A-Z][A-Z0-9\-_]{2,20})\b/i
-// Also handle Danish "Varenr." label
-const SKU_RE_G  = /\b(?:SKU|Varenr\.?)\s*:?\s*([A-Z][A-Z0-9\-_]{2,20})\b/gi
-const PRICE_RE  = /([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:DKK|kr\.?)/gi
-// "N ×" quantity prefix that appears in Shopify "1 × 44.995,00 DKK" lines
-const QTY_X_RE  = /(\d+)\s*[×xX]\s*([\d.,]+)/
+// Matches "SKU: CEP028" or "Varenr.: IT25" etc.
+const SKU_RE_G = /\b(?:SKU|Varenr\.?)\s*:?\s*([A-Z][A-Z0-9\-_]{2,20})\b/gi
+// DKK price in Danish or English format
+const PRICE_RE = /([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:DKK|kr\.?)/gi
+// "N ×" quantity that Shopify puts before unit prices
+const QTY_X_RE = /(\d+)\s*[×xX]\s*[\d.,]/
 
-/** Lines to ignore when looking for product names */
+/** True for lines that are structural noise, not product names */
 function isNoiseLine(line) {
   return (
     line.length < 3 ||
@@ -145,73 +151,43 @@ function isNoiseLine(line) {
 
 function parseLineItems(html) {
   const items = []
-  const seen  = new Set()   // deduplicate by SKU
+  const seen  = new Set()
 
-  // ── Pass 1: table-row based ───────────────────────────────────────────────
-  // Iterate every <tr> and check whether its text contains a SKU pattern.
-  const trRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi
-  let trM
-  while ((trM = trRe.exec(html)) !== null) {
-    const rowHtml = trM[1]
-    const rowText = stripTags(rowHtml)
+  // For each SKU occurrence in the raw HTML, grab ±800 chars of context.
+  // This captures both the product-name cell (before the SKU) and the price
+  // cell (sibling <td> after), regardless of nesting depth.
+  const skuHits = [...html.matchAll(SKU_RE_G)]
 
-    const skuM = rowText.match(SKU_RE)
-    if (!skuM) continue
-    const sku = skuM[1].toUpperCase()
+  for (const hit of skuHits) {
+    const sku = hit[1].toUpperCase()
     if (seen.has(sku)) continue
 
-    // Product name: meaningful non-noise lines before the SKU line
-    const lines   = rowText.split('\n').map(l => l.trim())
-    const skuIdx  = lines.findIndex(l => SKU_RE.test(l))
-    const before  = skuIdx > 0 ? lines.slice(0, skuIdx) : lines
-    const nameCands = before.filter(l => !isNoiseLine(l))
-    const name    = nameCands[nameCands.length - 1] || sku
+    const ctxStart   = Math.max(0, hit.index - 600)
+    const ctxEnd     = Math.min(html.length, hit.index + 600)
+    const ctxText    = stripTags(html.slice(ctxStart, ctxEnd))
+    const beforeText = stripTags(html.slice(ctxStart, hit.index))
 
-    // Quantity: "N ×" pattern or explicit label
-    const qtyM = rowText.match(QTY_X_RE) ||
-                 rowText.match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
+    // ── Product name ────────────────────────────────────────────────────────
+    const beforeLines = beforeText.split('\n').map(l => l.trim())
+    const nameCands   = beforeLines.filter(l => !isNoiseLine(l))
+    const name        = nameCands[nameCands.length - 1] || sku
+
+    // ── Quantity ─────────────────────────────────────────────────────────────
+    const qtyM    = ctxText.match(QTY_X_RE) ||
+                    ctxText.match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
     const quantity = qtyM ? parseInt(qtyM[1]) : 1
 
-    // Price: collect all DKK amounts; last one is usually the line total
-    const priceHits = [...rowText.matchAll(PRICE_RE)]
-    const net_price = priceHits.length
-      ? parsePrice(priceHits[priceHits.length - 1][0])
+    // ── Price ────────────────────────────────────────────────────────────────
+    // Collect all DKK amounts in the context; last one is usually the line total.
+    // Filter out trivially small amounts (< 10 DKK) to avoid qty or year numbers.
+    const priceHits   = [...ctxText.matchAll(PRICE_RE)]
+    const validPrices = priceHits.filter(p => parsePrice(p[0]) >= 10)
+    const net_price   = validPrices.length
+      ? parsePrice(validPrices[validPrices.length - 1][0])
       : 0
 
     seen.add(sku)
     items.push({ sku, name: name.slice(0, 200), quantity, net_price })
-  }
-
-  // ── Pass 2: text-window based (fallback) ─────────────────────────────────
-  if (items.length === 0) {
-    const fullText = stripTags(html)
-    const hits     = [...fullText.matchAll(SKU_RE_G)]
-
-    for (const hit of hits) {
-      const sku = hit[1].toUpperCase()
-      if (seen.has(sku)) continue
-
-      const idx    = hit.index
-      const before = fullText.slice(Math.max(0, idx - 300), idx)
-      const after  = fullText.slice(idx + hit[0].length, idx + hit[0].length + 300)
-
-      // Product name: last non-noise line before SKU
-      const beforeLines = before.split('\n').map(l => l.trim())
-      const nameCands   = beforeLines.filter(l => !isNoiseLine(l))
-      const name        = nameCands[nameCands.length - 1] || sku
-
-      // Quantity
-      const qtyM = (before + after).match(QTY_X_RE) ||
-                   (before + after).match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
-      const quantity = qtyM ? parseInt(qtyM[1]) : 1
-
-      // Price: first price amount found after the SKU
-      const priceHits = [...after.matchAll(PRICE_RE)]
-      const net_price = priceHits.length ? parsePrice(priceHits[0][0]) : 0
-
-      seen.add(sku)
-      items.push({ sku, name: name.slice(0, 200), quantity, net_price })
-    }
   }
 
   return items
@@ -236,17 +212,28 @@ function parseDelivery(html) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parseAddress(html) {
-  // Find the section that follows a "Leveringsadresse" / "Shipping address" heading
-  const re = /(?:Leveringsadresse|Leveringsoplysninger|Shipping\s+address)\s*<\/[^>]+>([\s\S]{0,600}?)(?=<(?:h[1-6]|table)\b)/i
-  const m  = html.match(re)
-  if (!m) {
-    // Fallback: look in plain text
-    const text  = stripTags(html)
-    const textM = text.match(/(?:Leveringsadresse|Shipping\s+address)\s*\n([\s\S]{0,300}?)(?:\n\n|$)/i)
-    if (!textM) return ''
-    return textM[1].split('\n').map(l => l.trim()).filter(l => l).join(', ')
+  // Convert to plain text, find the "Leveringsadresse" header line,
+  // then collect the following lines until a section boundary or 6 lines max.
+  // Line-index approach avoids the double-newline trap that breaks regex.
+  const text  = stripTags(html)
+  const lines = text.split('\n').map(l => l.trim())
+
+  const headerIdx = lines.findIndex(l =>
+    /^(?:Leveringsadresse|Leveringsoplysninger|Shipping\s+address)\s*$/i.test(l)
+  )
+  if (headerIdx === -1) return ''
+
+  const STOP_RE = /^(?:Subtotal|Levering|Fragt|I\s+alt|Total|Moms|Skat|Faktura|Betalings)/i
+
+  const addressLines = []
+  for (let i = headerIdx + 1; i < lines.length && addressLines.length < 7; i++) {
+    const l = lines[i]
+    if (!l)              continue          // skip blank lines but keep going
+    if (STOP_RE.test(l)) break             // hit totals section — stop
+    addressLines.push(l)
   }
-  return stripTags(m[1]).split('\n').map(l => l.trim()).filter(l => l).join(', ')
+
+  return addressLines.join(', ')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
