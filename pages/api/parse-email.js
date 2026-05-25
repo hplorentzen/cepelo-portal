@@ -162,29 +162,44 @@ function parseLineItems(html) {
     const sku = hit[1].toUpperCase()
     if (seen.has(sku)) continue
 
-    const ctxStart   = Math.max(0, hit.index - 600)
-    const ctxEnd     = Math.min(html.length, hit.index + 600)
-    const ctxText    = stripTags(html.slice(ctxStart, ctxEnd))
-    const beforeText = stripTags(html.slice(ctxStart, hit.index))
-
-    // ── Product name ────────────────────────────────────────────────────────
+    // ── Product name (text BEFORE the SKU) ─────────────────────────────────
+    const beforeText  = stripTags(html.slice(Math.max(0, hit.index - 500), hit.index))
     const beforeLines = beforeText.split('\n').map(l => l.trim())
     const nameCands   = beforeLines.filter(l => !isNoiseLine(l))
     const name        = nameCands[nameCands.length - 1] || sku
 
-    // ── Quantity ─────────────────────────────────────────────────────────────
-    const qtyM    = ctxText.match(QTY_X_RE) ||
-                    ctxText.match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
-    const quantity = qtyM ? parseInt(qtyM[1]) : 1
+    // ── Text AFTER the SKU – used for qty and price ─────────────────────────
+    // Use a 600-char window but stop at the first totals keyword so we
+    // never accidentally pick up the subtotal / grand total row.
+    const rawAfter  = html.slice(hit.index + hit[0].length,
+                                 Math.min(html.length, hit.index + 600))
+    const afterText = stripTags(rawAfter)
 
-    // ── Price ────────────────────────────────────────────────────────────────
-    // Collect all DKK amounts in the context; last one is usually the line total.
-    // Filter out trivially small amounts (< 10 DKK) to avoid qty or year numbers.
-    const priceHits   = [...ctxText.matchAll(PRICE_RE)]
+    // Truncate afterText at "Subtotal / I alt / Total" boundary
+    const stopIdx  = afterText.search(/\b(?:Subtotal|I\s+alt|Total)\b/i)
+    const priceZone = stopIdx > 0 ? afterText.slice(0, stopIdx) : afterText
+
+    // ── Quantity ──────────────────────────────────────────────────────────────
+    // Priority: "N × price" inline → "Antal: N" label → bare integer on own line
+    const qtyM = priceZone.match(QTY_X_RE) ||
+                 priceZone.match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
+    let quantity = 1
+    if (qtyM) {
+      quantity = parseInt(qtyM[1])
+    } else {
+      // Shopify puts qty in its own <td> → standalone integer on its own line
+      const standaloneQty = priceZone
+        .split('\n')
+        .map(l => l.trim())
+        .find(l => /^\d{1,3}$/.test(l) && parseInt(l) >= 1 && parseInt(l) <= 999)
+      if (standaloneQty) quantity = parseInt(standaloneQty)
+    }
+
+    // ── Price (first valid DKK amount after SKU, before totals) ──────────────
+    // Using the FIRST match rather than last to avoid grand-total bleed-in.
+    const priceHits   = [...priceZone.matchAll(PRICE_RE)]
     const validPrices = priceHits.filter(p => parsePrice(p[0]) >= 10)
-    const net_price   = validPrices.length
-      ? parsePrice(validPrices[validPrices.length - 1][0])
-      : 0
+    const net_price   = validPrices.length ? parsePrice(validPrices[0][0]) : 0
 
     seen.add(sku)
     items.push({ sku, name: name.slice(0, 200), quantity, net_price })
