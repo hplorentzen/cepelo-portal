@@ -7,7 +7,7 @@
 // Headers : x-cepelo-secret: <CEPELO_API_SECRET>
 // Body (JSON):
 //   subject    – email subject line (used to detect type + customer name)
-//   body_html  – raw HTML of the notification email (required)
+//   body_html  – raw HTML of the notification email (required; "html" also accepted)
 //   lang       – "da" | "no" | "is"  (default "da")
 //   valid_days – quote validity in days (default 30)
 //
@@ -275,42 +275,44 @@ export default async function handler(req, res) {
 
   const {
     subject    = '',
-    body_html  = '',
+    body_html,
+    html: html_field,
     lang       = 'da',
     valid_days = 30,
   } = req.body
 
-  const debug = req.query.debug === '1'
+  const debug    = req.query.debug === '1'
+  const emailHtml = body_html || html_field || ''
 
-  if (!body_html) return res.status(400).json({ error: 'body_html is required' })
+  if (!emailHtml) return res.status(400).json({ error: 'body_html (or html) is required' })
 
   // ── 1. Parse email content ─────────────────────────────────────────────────
   const subjectData = parseSubject(subject)
 
   // If subject didn't yield a quote ref, try the body
   if (!subjectData.quote_ref) {
-    subjectData.quote_ref = parseQuoteRef(body_html)
+    subjectData.quote_ref = parseQuoteRef(emailHtml)
   }
 
   // Also try subject-style markers in the first 200 chars of the body text
   if (!subjectData.recipient_company) {
-    const bodyStart = stripTags(body_html).slice(0, 400)
+    const bodyStart = stripTags(emailHtml).slice(0, 400)
     const dealerM   = bodyStart.match(/FORHANDLER\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
     const custM     = bodyStart.match(/SLUTKUNDE\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
     if (dealerM) { subjectData.type = 'dealer';   subjectData.recipient_company = dealerM[1].trim() }
     if (custM)   { subjectData.type = 'customer'; subjectData.recipient_company = custM[1].trim() }
   }
 
-  const rawItems = parseLineItems(body_html)
-  const delivery = parseDelivery(body_html)
-  const address  = parseAddress(body_html)
+  const rawItems = parseLineItems(emailHtml)
+  const delivery = parseDelivery(emailHtml)
+  const address  = parseAddress(emailHtml)
 
   if (rawItems.length === 0) {
     return res.status(422).json({
       error:   'No line items with SKUs found in email body',
       hint:    'Ensure the email contains "SKU: XXXXX" for each product',
       subject: subjectData,
-      preview: stripTags(body_html).slice(0, 600),
+      preview: stripTags(emailHtml).slice(0, 600),
     })
   }
 
