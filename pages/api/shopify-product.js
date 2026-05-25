@@ -101,20 +101,20 @@ function normaliseProduct(node, targetSku) {
 export default async function handler(req, res) {
   const sku    = req.query.sku || req.body?.sku
   const domain = process.env.SHOPIFY_STORE_DOMAIN || 'cepelotools.myshopify.com'
-  const token  = process.env.SHOPIFY_STOREFRONT_TOKEN
+  const token  = process.env.SHOPIFY_STOREFRONT_TOKEN   // optional — tokenless access works for public product data
 
-  if (!sku)   return res.status(400).json({ error: 'Pass ?sku=...' })
-  if (!token) return res.status(500).json({ error: 'SHOPIFY_STOREFRONT_TOKEN not set' })
+  if (!sku) return res.status(400).json({ error: 'Pass ?sku=...' })
 
   const url = `https://${domain}/api/${STOREFRONT_API_VERSION}/graphql.json`
+
+  // Build headers — omit auth header when no token (Shopify allows tokenless reads up to 1 000 complexity)
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['X-Shopify-Storefront-Access-Token'] = token
 
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type':                    'application/json',
-        'X-Shopify-Storefront-Access-Token': token,
-      },
+      headers,
       body: JSON.stringify({
         query:     PRODUCT_BY_SKU_QUERY,
         variables: { query: `variants.sku:${sku}` },
