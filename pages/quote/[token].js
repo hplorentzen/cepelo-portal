@@ -24,10 +24,25 @@ export default function QuotePage({ quote }) {
     </div>
   )
 
-  const accessories = quote.available_accessories || []
-  const hardware = (quote.line_items || []).filter(i => i.type === 'accessory')
-  const software = (quote.line_items || []).filter(i => i.type === 'software')
+  const accessories    = quote.available_accessories || []
+  // Product line items: regular products from the order (no type or type='product')
+  const productLineItems = (quote.line_items || []).filter(i => !['accessory','software','subscription'].includes(i.type))
+  // Typed sub-items shown inside the main product block
+  const hardware      = (quote.line_items || []).filter(i => i.type === 'accessory')
+  const software      = (quote.line_items || []).filter(i => i.type === 'software')
   const subscriptions = (quote.line_items || []).filter(i => i.type === 'subscription')
+
+  // Truncate description to first 2 sentences
+  function shortDesc(text) {
+    if (!text) return ''
+    let count = 0
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '.' || text[i] === '!' || text[i] === '?') {
+        if (++count === 2) return text.slice(0, i + 1).trim()
+      }
+    }
+    return text.length > 250 ? text.slice(0, 250) + '…' : text
+  }
 
   const selectedTotal = selectedAccessories.reduce((sum, acc) => sum + (parsePrice(acc.gross_price) || 0), 0)
   const totalGrossOneTime = parsePrice(mainGross) +
@@ -165,14 +180,21 @@ export default function QuotePage({ quote }) {
 
         <div className="parties">
           <div className="party-card">
-            <div className="party-role">{tr.from}</div>
-            <div className="party-name">{isDealer ? 'CEPELO A/S' : (quote.dealer_name || 'CEPELO A/S')}</div>
-            <div className="party-details">{isDealer ? <>Industrivej 12, 8600 Silkeborg<br />salg@cepelo.dk · +45 86 82 00 00</> : <>{quote.sender_email}<br />{quote.sender_phone}</>}</div>
+            <div className="party-role">Forhandler</div>
+            <div className="party-name">{quote.dealer_name || '—'}</div>
+            <div className="party-details">
+              {quote.dealer_email && <>{quote.dealer_email}<br /></>}
+              {quote.dealer_phone && <>{quote.dealer_phone}</>}
+            </div>
           </div>
           <div className="party-card">
-            <div className="party-role">{tr.to}</div>
-            <div className="party-name">{quote.recipient_company || quote.recipient_name}</div>
-            <div className="party-details">{quote.recipient_name && <>{quote.recipient_name}<br /></>}{quote.recipient_email}<br />{quote.recipient_phone}</div>
+            <div className="party-role">Slutkunde</div>
+            <div className="party-name">{quote.recipient_company || quote.recipient_name || '—'}</div>
+            <div className="party-details">
+              {quote.recipient_name && quote.recipient_name !== quote.recipient_company && <>{quote.recipient_name}<br /></>}
+              {quote.recipient_email && <>{quote.recipient_email}<br /></>}
+              {quote.recipient_phone && <>{quote.recipient_phone}</>}
+            </div>
           </div>
         </div>
 
@@ -182,9 +204,12 @@ export default function QuotePage({ quote }) {
             <div className="product-main">
               <div className="product-img">{quote.main_product.image_url ? <img src={quote.main_product.image_url} style={{width:'100%',height:'100%',objectFit:'cover'}} /> : '⚙️'}</div>
               <div className="product-info">
-                <div className="product-cat">{quote.category}</div>
+                <div className="product-cat">{quote.main_product.product_type || quote.category}</div>
                 <div className="product-name">{quote.main_product.name}</div>
-                <div className="product-desc">{quote.main_product.description}</div>
+                <div className="product-desc">
+                  {shortDesc(quote.main_product.description)}
+                  {quote.main_product.shopify_handle && <>{' '}<a href={`https://cepelo.dk/products/${quote.main_product.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>}
+                </div>
               </div>
               <div className="price-col">
                 {isDealer ? <>
@@ -212,6 +237,46 @@ export default function QuotePage({ quote }) {
               {subscriptions.length > 0 && <><div className="sub-section-label">{tr.subscriptions}</div>{subscriptions.map((item, idx) => <div className="sub-item" key={idx}><div><div className="item-name">{item.name}</div>{item.description && <div className="item-desc">{item.description}</div>}</div><div className="item-qty"><span className={`sub-badge ${item.badge || 'monthly'}`}>{item.badge === 'yearly' ? tr.yearly : tr.monthly}</span></div><div className="item-price">{formatPrice(item.gross_price, lang)}{item.badge === 'yearly' ? tr.perYear : tr.perMonth}</div></div>)}</>}
             </div>}
           </div>
+        {productLineItems.length > 0 && <>
+          <div className="section-title" style={{marginTop:24}}>{tr.lineItems || 'Øvrige produkter'}</div>
+          {productLineItems.map((item, idx) => {
+            const liIdx = (quote.line_items || []).indexOf(item)
+            return <div className="product-block" key={idx} style={{marginBottom:12}}>
+              <div className="product-main">
+                <div className="product-img" style={{minHeight:80}}>
+                  {item.image_url
+                    ? <img src={item.image_url} style={{width:'100%',height:'100%',objectFit:'cover'}} />
+                    : '📦'}
+                </div>
+                <div className="product-info">
+                  <div className="product-cat">{item.product_type || item.sku}</div>
+                  <div className="product-name" style={{fontSize:17}}>{item.name}</div>
+                  {item.quantity > 1 && <div style={{fontSize:12,color:'var(--ink-muted)',marginTop:4}}>Antal: {item.quantity}</div>}
+                  {item.description && <div className="product-desc" style={{marginTop:6}}>
+                    {shortDesc(item.description)}
+                    {item.shopify_handle && <>{' '}<a href={`https://cepelo.dk/products/${item.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>}
+                  </div>}
+                </div>
+                <div className="price-col">
+                  {isDealer ? <>
+                    <div className="netto-block">
+                      <div className="price-label">{tr.netPrice}</div>
+                      <div className="price-value" style={{fontSize:18,color:'var(--dealer-bg)'}}>{formatPrice(item.net_price, lang)}</div>
+                      <div className="price-unit">{tr.exclVat}</div>
+                    </div>
+                    {(item.gross_price > 0) && <div>
+                      <div className="price-label">{tr.grossPrice}</div>
+                      <input className="line-edit" value={lineGross[liIdx] ?? item.gross_price} onChange={e => { const n=[...lineGross]; n[liIdx]=e.target.value; setLineGross(n) }} />
+                    </div>}
+                  </> : <>
+                    <div className="price-label">{tr.quote}</div>
+                    <div className="price-value">{formatPrice(item.gross_price || item.net_price, lang)}</div>
+                    <div className="price-unit">{tr.exclVat}</div>
+                  </>}
+                </div>
+              </div>
+            </div>
+          })}
         </>}
 
         {accessories.length > 0 && <div className="acc-section no-print">
@@ -267,8 +332,8 @@ export default function QuotePage({ quote }) {
         </div>}
 
         <div className="quote-footer">
-          <div className="footer-brand"><strong>{isDealer ? 'CEPELO A/S' : (quote.dealer_name || 'CEPELO A/S')}</strong> · salg@cepelo.dk</div>
-          <div className="footer-contact">cepelo.dk</div>
+          <div className="footer-brand"><strong>CEPELO A/S</strong> · Nibevej 54, 9200 Aalborg SV</div>
+          <div className="footer-contact">+45 98 18 09 00 · info@cepelo.dk · cepelo.dk</div>
         </div>
       </div>
     </>

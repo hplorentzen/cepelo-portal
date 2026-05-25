@@ -2,7 +2,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes } from 'crypto'
 import { getAccessoriesForSku } from '../../lib/accessories'
-import { fetchProductBySku, fetchProductRecommendations } from '../../lib/shopify'
+import { fetchProductBySku } from '../../lib/shopify'
 
 const adminClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -76,21 +76,8 @@ export default async function handler(req, res) {
       // a) Static / curated accessories
       const staticAccessories = mainSku ? getAccessoriesForSku(mainSku) : []
 
-      // b) Shopify recommendations
-      let shopifyRecs = []
-      if (shopifyProduct?.shopify_product_id) {
-        try {
-          shopifyRecs = await fetchProductRecommendations(shopifyProduct.shopify_product_id)
-          console.log(`[create-quote] ${shopifyRecs.length} Shopify recommendations fetched`)
-        } catch (e) {
-          console.warn('[create-quote] Shopify recommendations fetch failed:', e.message)
-        }
-      }
-
-      // Merge: static first, then Shopify — deduplicate by SKU
-      const seenSkus   = new Set(staticAccessories.map(a => a.sku))
-      const uniqueRecs = shopifyRecs.filter(r => !seenSkus.has(r.sku))
-      availableAccessories = [...staticAccessories, ...uniqueRecs]
+      // Only use curated static accessories — Shopify recommendations are too unpredictable
+      availableAccessories = staticAccessories
     }
 
     // ── 3. Insert quote into Supabase ──────────────────────────────────────

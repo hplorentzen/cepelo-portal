@@ -22,7 +22,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes }  from 'crypto'
-import { fetchProductBySku, fetchProductRecommendations } from '../../lib/shopify'
+import { fetchProductBySku } from '../../lib/shopify'
 import { getAccessoriesForSku }                           from '../../lib/accessories'
 
 const adminClient = createClient(
@@ -390,22 +390,9 @@ export default async function handler(req, res) {
     })
   }
 
-  // ── 4. Available accessories ───────────────────────────────────────────────
-  const mainSku           = first.sku
-  const staticAccessories = getAccessoriesForSku(mainSku)
-
-  let shopifyRecs = []
-  if (first.shopify?.shopify_product_id) {
-    try {
-      shopifyRecs = await fetchProductRecommendations(first.shopify.shopify_product_id)
-    } catch (e) {
-      console.warn('[parse-email] Recommendations error:', e.message)
-    }
-  }
-
-  const seenSkus   = new Set(staticAccessories.map(a => a.sku))
-  const uniqueRecs = shopifyRecs.filter(r => !seenSkus.has(r.sku))
-  const available_accessories = [...staticAccessories, ...uniqueRecs]
+  // ── 4. Available accessories (static only — Shopify recs are too unpredictable) ───
+  const mainSku              = first.sku
+  const available_accessories = getAccessoriesForSku(mainSku)
 
   // ── 5. Debug mode – return parsed data without writing anything ────────────
   const parsedSummary = {
@@ -421,8 +408,7 @@ export default async function handler(req, res) {
       net_price:   i.net_price,
       shopify_ok:  !!i.shopify,
     })),
-    accessories_count:      available_accessories.length,
-    recommendations_count:  uniqueRecs.length,
+    accessories_count: available_accessories.length,
   }
 
   if (debug) {
