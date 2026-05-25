@@ -246,13 +246,17 @@ function parseAddress(html) {
   // Convert to plain text, find the "Leveringsadresse" header line,
   // then collect the following lines until a section boundary or 6 lines max.
   // Line-index approach avoids the double-newline trap that breaks regex.
+  //
+  // Returns { company, address } where:
+  //   company – first line of the address block (usually the dealer company name)
+  //   address – all lines joined with ", " (full delivery address)
   const text  = stripTags(html)
   const lines = text.split('\n').map(l => l.trim())
 
   const headerIdx = lines.findIndex(l =>
     /^(?:Leveringsadresse|Leveringsoplysninger|Shipping\s+address)\s*$/i.test(l)
   )
-  if (headerIdx === -1) return ''
+  if (headerIdx === -1) return { company: '', address: '' }
 
   const STOP_RE = /^(?:Subtotal|Levering|Fragt|I\s+alt|Total|Moms|Skat|Faktura|Betalings)/i
 
@@ -264,7 +268,10 @@ function parseAddress(html) {
     addressLines.push(l)
   }
 
-  return addressLines.join(', ')
+  // In Shopify emails the first line of the delivery address is typically
+  // the company name (for B2B/dealer orders).
+  const company = addressLines[0] || ''
+  return { company, address: addressLines.join(', ') }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -399,8 +406,9 @@ export default async function handler(req, res) {
     type:               subjectData.type,
     quote_ref:          subjectData.quote_ref,
     recipient_company:  subjectData.recipient_company,
+    dealer_name:        address.company,
     delivery,
-    address,
+    address:            address.address,
     items: enriched.map(i => ({
       sku:         i.sku,
       name:        i.shopify?.name || i.name,
@@ -416,12 +424,14 @@ export default async function handler(req, res) {
   }
 
   // ── 6. Insert quote into Supabase ──────────────────────────────────────────
-  const token      = randomBytes(16).toString('hex')
-  const validUntil = new Date()
+  const token          = randomBytes(16).toString('hex')
+  const customer_token = randomBytes(16).toString('hex')
+  const validUntil     = new Date()
   validUntil.setDate(validUntil.getDate() + valid_days)
 
   const { error } = await adminClient.from('quotes').insert({
     token,
+    customer_token,
     shopify_order_id:      subjectData.quote_ref || 'PARSED',
     type:                  subjectData.type,
     lang,
@@ -434,12 +444,12 @@ export default async function handler(req, res) {
     recipient_company:     subjectData.recipient_company || '',
     recipient_email:       '',
     recipient_phone:       '',
-    dealer_name:           '',
+    dealer_name:           address.company || '',
     dealer_email:          '',
     main_product,
     line_items,
     available_accessories,
-    notes:                 address ? `Leveringsadresse: ${address}` : '',
+    notes:                 address.address ? `Leveringsadresse: ${address.address}` : '',
     valid_until:           validUntil.toISOString().split('T')[0],
   })
 
@@ -448,14 +458,14 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Supabase error: ${error.message}` })
   }
 
-  const baseUrl  = process.env.NEXT_PUBLIC_BASE_URL
-  const quoteUrl = `${baseUrl}/quote/${token}`
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
 
   return res.status(200).json({
     success:              true,
     token,
-    quote_url:            quoteUrl,
-    customer_url:         `${quoteUrl}?view=customer`,
+    customer_token,
+    quote_url:            `${baseUrl}/quote/${token}`,
+    customer_url:         `${baseUrl}/quote/${customer_token}`,
     parsed:               parsedSummary,
   })
 }
