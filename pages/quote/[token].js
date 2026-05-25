@@ -278,6 +278,7 @@ export default function QuotePage({ quote }) {
             </div>
           })}
         </>}
+        </>}
 
         {accessories.length > 0 && <div className="acc-section no-print">
           <div className="section-title">{tr.accessories}</div>
