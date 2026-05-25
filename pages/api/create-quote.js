@@ -54,27 +54,31 @@ async function fetchProductBySku(token, sku) {
   return detailData?.data ?? null
 }
 
-function extractPlytixProduct(product, requestProduct) {
+function extractPlytixProduct(product, requestProduct, lang = 'da') {
   if (!product) return requestProduct || null
 
   const attrs = product.attributes || {}
 
-  // Price: prefer gross_price, fall back to net_price * 1.35
-  const netPrice  = Math.round(parseFloat(attrs.net_price  ?? attrs.price_net  ?? attrs.cost ?? 0) || 0)
-  const rawGross  = parseFloat(attrs.gross_price ?? attrs.price ?? attrs.price_gross ?? 0) || 0
+  // Prices — keyed by lang (da → DKK, no → NOK, is → DKK fallback)
+  const netKey   = lang === 'no' ? 'nettopris_nok'   : 'nettopris_dkk'
+  const grossKey = lang === 'no' ? 'bruttopris_nok'  : 'bruttopris_dkk'
+  const netPrice   = Math.round(parseFloat(attrs[netKey]   ?? 0) || 0)
+  const rawGross   = parseFloat(attrs[grossKey] ?? 0) || 0
   const grossPrice = rawGross > 0 ? Math.round(rawGross) : Math.round(netPrice * 1.35)
 
-  // Image: attribute first, then first asset, then thumbnail
+  // Description — Danish by default, English fallback
+  const description = attrs.lang_varetekst || attrs.lang_tekst_eng || ''
+
+  // Image — thumbnail object at top level, then first asset
   const imageUrl =
-    attrs.image_url ||
+    product.thumbnail?.url ||
     product.assets?.[0]?.url ||
-    product.thumbnail ||
     null
 
   return {
-    sku: product.sku ?? requestProduct?.sku,
-    name:        requestProduct?.name        || attrs.name || attrs.product_name || product.label || product.sku,
-    description: requestProduct?.description || attrs.description || attrs.short_description || '',
+    sku:         product.sku         ?? requestProduct?.sku,
+    name:        requestProduct?.name        || product.label || product.sku,
+    description: requestProduct?.description || description,
     image_url:   requestProduct?.image_url   || imageUrl,
     net_price:   requestProduct?.net_price   ?? netPrice,
     gross_price: requestProduct?.gross_price ?? grossPrice,
@@ -106,7 +110,7 @@ export default async function handler(req, res) {
       try {
         const plytixToken = await getPlytixToken()
         const plytixProduct = await fetchProductBySku(plytixToken, mainSku)
-        mainProduct = extractPlytixProduct(plytixProduct, mainProduct)
+        mainProduct = extractPlytixProduct(plytixProduct, mainProduct, req.body.lang || 'da')
         enrichedFromPlytix = !!plytixProduct
       } catch (plytixErr) {
         // Non-fatal: log and continue with request body data
