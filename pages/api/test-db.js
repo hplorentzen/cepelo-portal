@@ -15,10 +15,8 @@ export default async function handler(req, res) {
 
   if (error) {
     return res.status(500).json({
-      error: error.message,
-      code: error.code,
-      hint: error.hint,
-      details: error.details,
+      raw: JSON.parse(JSON.stringify(error, Object.getOwnPropertyNames(error))),
+      supabaseUrl: url.slice(0, 30),
     })
   }
 
