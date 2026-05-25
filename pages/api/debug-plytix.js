@@ -45,15 +45,14 @@ export default async function handler(req, res) {
     const hit = searchBody?.data?.[0]
     result.productId    = hit?.id ?? null
 
-    // Step 3: product detail
+    // Step 3: product detail — return full raw response for field mapping
     if (hit?.id) {
       const detailRes  = await fetch(`${PLYTIX_BASE}/products/${hit.id}`, {
         headers: { 'Authorization': `Bearer ${token}` },
       })
       const detailBody = await detailRes.json()
-      result.detailStatus = detailRes.status
-      result.attributes   = detailBody?.data?.attributes ?? {}
-      result.label        = detailBody?.data?.label
+      result.detailStatus  = detailRes.status
+      result.productRaw    = detailBody?.data ?? null   // full product object
     }
   } catch (e) {
     return res.status(200).json({ ...result, step: 'search_threw', error: e.message })
