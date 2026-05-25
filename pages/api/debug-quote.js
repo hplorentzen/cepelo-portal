@@ -31,8 +31,8 @@ export default async function handler(req, res) {
   return res.status(200).json({
     token,
     supabaseUrl: url?.slice(0, 40),
-    anonKeySet: !!anonKey,
-    serviceKeySet: !!serviceKey,
+    anonKey: anonKey ? `${anonKey.slice(0, 12)}...${anonKey.slice(-6)} (len:${anonKey.length})` : 'NOT SET',
+    serviceKey: serviceKey ? `${serviceKey.slice(0, 12)}...${serviceKey.slice(-6)} (len:${serviceKey.length})` : 'NOT SET',
     results,
   })
 }
