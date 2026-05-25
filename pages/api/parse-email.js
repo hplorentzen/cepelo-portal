@@ -130,19 +130,24 @@ function parseSubject(subject = '') {
 // row and misses the price.  Context-window grabs both.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Matches "SKU: CEP028" or "Varenr.: IT25" etc.
-const SKU_RE_G = /\b(?:SKU|Varenr\.?)\s*:?\s*([A-Z][A-Z0-9\-_]{2,20})\b/gi
-// DKK price in Danish or English format
+// Matches "SKU: CEP028", "Varenr.: IT25", "Varenummer: AUT100003195_1" etc.
+// SKU char class starts with [A-Z0-9] (some IDs start with a digit) and
+// allows up to 35 chars to cover long identifiers like "AUT100003195_1".
+const SKU_RE_G = /\b(?:SKU|Varenr\.?|Varenummer)\s*:?\s*([A-Z0-9][A-Z0-9\-_]{2,35})\b/gi
+// DKK / kr price in Danish or English format
 const PRICE_RE = /([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:DKK|kr\.?)/gi
-// "N ×" quantity that Shopify puts before unit prices
-const QTY_X_RE = /(\d+)\s*[×xX]\s*[\d.,]/
+// "N × price" — qty is the number BEFORE × (standard Shopify inline)
+const QTY_BEFORE_X_RE = /(\d+)\s*[×xX]\s*[\d.,]/
+// "name × qty\n" — qty is the number AFTER × at end of a line
+//   e.g. "AUTEL EV-pakke til Ultra + 909 × 1\nVarenummer: ..."
+const QTY_AFTER_X_RE  = /[×xX]\s*(\d{1,4})\s*$/m
 
 /** True for lines that are structural noise, not product names */
 function isNoiseLine(line) {
   return (
     line.length < 3 ||
     /^\s*$/.test(line) ||
-    /^(?:SKU|Varenr|Art\.?nr)/i.test(line) ||
+    /^(?:SKU|Varenr|Varenummer|Art\.?nr)/i.test(line) ||
     /^(?:Antal|Mængde|Qty|Quantity)\s*:/i.test(line) ||
     /^(?:Subtotal|Levering|Fragt|Forsendelse|Shipping|I\s+alt|Total|Moms|Skat)\b/i.test(line) ||
     /^[\d.,\s]+(?:DKK|kr\.?)?$/i.test(line)
@@ -162,35 +167,46 @@ function parseLineItems(html) {
     const sku = hit[1].toUpperCase()
     if (seen.has(sku)) continue
 
-    // ── Product name (text BEFORE the SKU) ─────────────────────────────────
-    const beforeText  = stripTags(html.slice(Math.max(0, hit.index - 500), hit.index))
-    const beforeLines = beforeText.split('\n').map(l => l.trim())
-    const nameCands   = beforeLines.filter(l => !isNoiseLine(l))
-    const name        = nameCands[nameCands.length - 1] || sku
+    // ── Text before and after the SKU label ────────────────────────────────
+    const beforeText = stripTags(html.slice(Math.max(0, hit.index - 500), hit.index))
+    const rawAfter   = html.slice(hit.index + hit[0].length,
+                                  Math.min(html.length, hit.index + 600))
+    const afterText  = stripTags(rawAfter)
 
-    // ── Text AFTER the SKU – used for qty and price ─────────────────────────
-    // Use a 600-char window but stop at the first totals keyword so we
-    // never accidentally pick up the subtotal / grand total row.
-    const rawAfter  = html.slice(hit.index + hit[0].length,
-                                 Math.min(html.length, hit.index + 600))
-    const afterText = stripTags(rawAfter)
-
-    // Truncate afterText at "Subtotal / I alt / Total" boundary
-    const stopIdx  = afterText.search(/\b(?:Subtotal|I\s+alt|Total)\b/i)
+    // Truncate afterText at "Subtotal / I alt / Total" to avoid grand-total bleed
+    const stopIdx   = afterText.search(/\b(?:Subtotal|I\s+alt|Total)\b/i)
     const priceZone = stopIdx > 0 ? afterText.slice(0, stopIdx) : afterText
 
+    // ── Product name (last meaningful line before the SKU label) ───────────
+    const beforeLines = beforeText.split('\n').map(l => l.trim())
+    const nameCands   = beforeLines.filter(l => !isNoiseLine(l))
+    const rawName     = nameCands[nameCands.length - 1] || sku
+    // Strip trailing "× qty" suffix — some templates embed qty in the title line
+    // e.g. "AUTEL EV-pakke til Ultra + 909 × 1" → "AUTEL EV-pakke til Ultra + 909"
+    const name = rawName.replace(/\s*[×xX]\s*\d+\s*$/, '').trim().slice(0, 200)
+
     // ── Quantity ──────────────────────────────────────────────────────────────
-    // Priority: "N × price" inline → "Antal: N" label → bare integer on own line
-    const qtyM = priceZone.match(QTY_X_RE) ||
-                 priceZone.match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
+    // Priority 1: "name × qty" at end of a line in the before-text
+    //   e.g. "AUTEL EV-pakke til Ultra + 909 × 1\nVarenummer: ..."
+    //   QTY_AFTER_X_RE captures the number AFTER × at end-of-line.
+    // Priority 2: "qty × price" in the after-text (standard Shopify inline)
+    //   e.g. "2 × 1.438,00 DKK" — QTY_BEFORE_X_RE captures the number BEFORE ×.
+    // Priority 3: "Antal: N" label
+    // Priority 4: standalone integer on its own line (bare <td>N</td>)
+    const lastBeforeLines = beforeLines.slice(-5).join('\n')
+    const qtyAfterX  = lastBeforeLines.match(QTY_AFTER_X_RE)
+    const qtyBeforeX = priceZone.match(QTY_BEFORE_X_RE)
+    const qtyLabel   = priceZone.match(/(?:Antal|Mængde|Qty)\s*:?\s*(\d+)/i)
     let quantity = 1
-    if (qtyM) {
-      quantity = parseInt(qtyM[1])
+    if (qtyAfterX) {
+      quantity = parseInt(qtyAfterX[1])
+    } else if (qtyBeforeX) {
+      quantity = parseInt(qtyBeforeX[1])
+    } else if (qtyLabel) {
+      quantity = parseInt(qtyLabel[1])
     } else {
-      // Shopify puts qty in its own <td> → standalone integer on its own line
       const standaloneQty = priceZone
-        .split('\n')
-        .map(l => l.trim())
+        .split('\n').map(l => l.trim())
         .find(l => /^\d{1,3}$/.test(l) && parseInt(l) >= 1 && parseInt(l) <= 999)
       if (standaloneQty) quantity = parseInt(standaloneQty)
     }
