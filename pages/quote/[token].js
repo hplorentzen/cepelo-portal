@@ -74,59 +74,59 @@ export default function QuotePage({ quote }) {
     <>
       <Head>
         <title>{tr.quote} #{(quote.token || quote.customer_token)?.slice(-6).toUpperCase()}</title>
-        <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&family=Barlow+Condensed:wght@300;400;600&display=swap" rel="stylesheet" />
+        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet" />
       </Head>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0}
-        :root{--ink:#1a1a24;--ink-light:#4a4a58;--ink-muted:#888899;--paper:#f8f7f4;--paper-warm:#f0ede6;--blue:#0077b6;--blue-light:#e0f0fa;--dealer-bg:#005a8e;--border:#ddd8ce;--white:#fff;--green:#2e7d32;--green-bg:#e8f5e9;--gold:#b8962e;--gold-bg:#f0e8d0}
-        body{font-family:'Barlow',sans-serif;background:var(--paper);color:var(--ink)}
+        :root{--ink:#1a1a24;--ink-light:#323232;--ink-muted:#767686;--paper:#F5F5F6;--paper-warm:#ECEDF0;--blue:#0868B2;--blue-light:#E8F3FC;--navy:#173454;--dealer-bg:#173454;--border:#E0E0E4;--white:#fff;--card-bg:#F7F7F7;--green:#2e7d32;--green-bg:#e8f5e9;--orange:#F19615;--orange-bg:#FFF3E0}
+        body{font-family:-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--paper);color:var(--ink-light)}
         .page{max-width:860px;margin:0 auto;padding:48px 32px 80px}
-        .view-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:20px;margin-bottom:28px}
-        .view-badge.dealer{background:var(--blue-light);color:var(--dealer-bg)}
-        .view-badge.customer{background:var(--paper-warm);color:var(--ink-light);border:1px solid var(--border)}
+        .view-badge{display:inline-flex;align-items:center;gap:6px;font-family:'Montserrat',sans-serif;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:5px 14px;border-radius:20px;margin-bottom:28px}
+        .view-badge.dealer{background:var(--navy);color:#fff}
+        .view-badge.customer{background:var(--paper);color:var(--navy);border:1px solid var(--border)}
         .dot{width:6px;height:6px;border-radius:50%}
-        .dealer .dot{background:var(--dealer-bg)} .customer .dot{background:var(--blue)}
+        .dealer .dot{background:#fff} .customer .dot{background:var(--blue)}
         .quote-header{display:grid;grid-template-columns:1fr auto;align-items:start;gap:32px;padding-bottom:36px;border-bottom:1px solid var(--border);margin-bottom:40px}
-        .tagline{font-size:12px;color:var(--ink-muted);letter-spacing:.08em;text-transform:uppercase;margin-top:4px}
+        .tagline{font-family:'Montserrat',sans-serif;font-size:11px;color:var(--ink-muted);letter-spacing:.1em;text-transform:uppercase;font-weight:600;margin-top:4px}
         .header-dealer{font-size:12px;color:var(--ink-light);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
         .quote-meta{text-align:right}
-        .quote-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:6px}
-        .quote-number{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:300}
+        .quote-label{font-family:'Montserrat',sans-serif;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);font-weight:600;margin-bottom:6px}
+        .quote-number{font-family:'Montserrat',sans-serif;font-size:22px;font-weight:800;color:var(--navy)}
         .quote-date{font-size:13px;color:var(--ink-muted);margin-top:4px}
-        .valid-until{font-size:12px;color:var(--blue);margin-top:3px;font-weight:500}
+        .valid-until{font-family:'Montserrat',sans-serif;font-size:12px;color:var(--blue);margin-top:3px;font-weight:600}
         .parties{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:40px}
         .party-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:20px 24px}
-        .party-role{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:10px}
-        .party-name{font-family:'Barlow Condensed',sans-serif;font-size:19px;font-weight:400;margin-bottom:6px}
+        .party-role{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:10px}
+        .party-name{font-family:'Montserrat',sans-serif;font-size:17px;font-weight:700;color:var(--navy);margin-bottom:6px}
         .party-details{font-size:13px;color:var(--ink-light);line-height:1.7}
-        .section-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+        .section-title{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
         .product-block{background:var(--white);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px}
         .product-main{display:grid;grid-template-columns:100px 1fr auto;align-items:stretch}
-        .product-img{background:var(--paper-warm);display:flex;align-items:center;justify-content:center;font-size:36px;min-height:110px}
+        .product-img{background:var(--card-bg);display:flex;align-items:center;justify-content:center;font-size:36px;min-height:110px}
         .product-info{padding:20px 24px;border-left:1px solid var(--border)}
-        .product-cat{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);margin-bottom:5px}
-        .product-name{font-family:'Barlow Condensed',sans-serif;font-size:20px;font-weight:400;margin-bottom:6px;line-height:1.3}
+        .product-cat{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);font-weight:600;margin-bottom:5px}
+        .product-name{font-family:'Montserrat',sans-serif;font-size:18px;font-weight:700;color:var(--navy);margin-bottom:6px;line-height:1.3}
         .product-desc{font-size:13px;color:var(--ink-light);line-height:1.6;max-width:460px}
         .price-col{padding:20px 24px;text-align:right;border-left:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;min-width:160px}
-        .price-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:4px}
-        .price-value{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:300}
+        .price-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);font-weight:600;margin-bottom:4px}
+        .price-value{font-family:'Montserrat',sans-serif;font-size:22px;font-weight:800;color:var(--navy)}
         .price-unit{font-size:12px;color:var(--ink-muted);margin-top:2px}
         .netto-block{margin-bottom:12px;padding-bottom:12px;border-bottom:1px dashed var(--border)}
-        .netto-block .price-value{color:var(--dealer-bg);font-size:18px}
-        .edit-input{font-family:'Barlow Condensed',sans-serif;font-size:22px;font-weight:300;color:var(--ink);border:none;border-bottom:2px solid var(--gold);background:transparent;text-align:right;width:120px;outline:none;padding:2px 0}
-        .edit-hint{font-size:10px;color:var(--gold);margin-top:3px;letter-spacing:.05em}
+        .netto-block .price-value{color:var(--navy);font-size:18px}
+        .edit-input{font-family:'Montserrat',sans-serif;font-size:20px;font-weight:800;color:var(--navy);border:none;border-bottom:2px solid var(--orange);background:transparent;text-align:right;width:120px;outline:none;padding:2px 0}
+        .edit-hint{font-family:'Montserrat',sans-serif;font-size:10px;color:var(--orange);font-weight:600;margin-top:3px;letter-spacing:.05em}
         .sub-items{border-top:1px solid var(--border)}
-        .sub-section-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);padding:12px 24px 8px;background:var(--paper)}
+        .sub-section-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);padding:12px 24px 8px;background:var(--paper)}
         .sub-item{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:16px;padding:12px 24px;border-top:1px solid var(--border)}
-        .item-name{font-size:14px} .item-desc{font-size:12px;color:var(--ink-muted);margin-top:2px}
-        .item-qty{font-size:13px;color:var(--ink-light);white-space:nowrap}
-        .item-price{font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:300;text-align:right;white-space:nowrap}
+        .item-name{font-size:14px;color:var(--ink-light)} .item-desc{font-size:12px;color:var(--ink-muted);margin-top:2px}
+        .item-qty{font-size:13px;color:var(--ink-muted);white-space:nowrap}
+        .item-price{font-family:'Montserrat',sans-serif;font-size:15px;font-weight:700;color:var(--navy);text-align:right;white-space:nowrap}
         .item-price-stack{text-align:right}
-        .netto-small{font-size:11px;color:var(--dealer-bg);font-weight:500}
-        .line-edit{font-family:'Barlow Condensed',sans-serif;font-size:15px;font-weight:300;border:none;border-bottom:1.5px solid var(--gold);background:transparent;text-align:right;width:90px;outline:none}
-        .sub-badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500;letter-spacing:.05em}
+        .netto-small{font-family:'Montserrat',sans-serif;font-size:11px;color:var(--navy);font-weight:600}
+        .line-edit{font-family:'Montserrat',sans-serif;font-size:15px;font-weight:700;color:var(--navy);border:none;border-bottom:1.5px solid var(--orange);background:transparent;text-align:right;width:90px;outline:none}
+        .sub-badge{font-family:'Montserrat',sans-serif;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;letter-spacing:.05em}
         .sub-badge.monthly{background:var(--green-bg);color:var(--green)}
-        .sub-badge.yearly{background:var(--gold-bg);color:var(--gold)}
+        .sub-badge.yearly{background:var(--orange-bg);color:var(--orange)}
         .acc-section{margin-top:20px;margin-bottom:20px}
         .acc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:12px}
         .acc-card{background:var(--white);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s;display:flex;align-items:flex-start;gap:10px}
@@ -134,36 +134,36 @@ export default function QuotePage({ quote }) {
         .acc-card.selected{border-color:var(--blue);background:var(--blue-light)}
         .acc-check{width:18px;height:18px;border-radius:4px;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
         .acc-card.selected .acc-check{background:var(--blue);border-color:var(--blue);color:white;font-size:11px}
-        .acc-name{font-size:13px;font-weight:500;color:var(--ink);margin-bottom:3px}
-        .acc-price{font-family:'Barlow Condensed',sans-serif;font-size:15px;color:var(--blue)}
-        .leasing-block{background:var(--paper-warm);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:20px}
-        .leasing-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:12px}
-        .leasing-amount{font-family:'Barlow Condensed',sans-serif;font-size:32px;font-weight:300;color:var(--ink)}
+        .acc-name{font-family:'Montserrat',sans-serif;font-size:13px;font-weight:600;color:var(--navy);margin-bottom:3px}
+        .acc-price{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:700;color:var(--blue)}
+        .leasing-block{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:20px}
+        .leasing-title{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:12px}
+        .leasing-amount{font-family:'Montserrat',sans-serif;font-size:32px;font-weight:800;color:var(--navy)}
         .leasing-sub{font-size:12px;color:var(--ink-muted);margin-top:4px}
         .leasing-disclaimer{font-size:11px;color:var(--ink-muted);margin-top:10px;line-height:1.5;font-style:italic}
         .totals-block{border-radius:12px;padding:28px 32px;margin-top:28px;color:var(--white)}
-        .totals-block.dealer{background:var(--dealer-bg)} .totals-block.customer{background:var(--ink)}
+        .totals-block.dealer{background:var(--navy)} .totals-block.customer{background:var(--ink)}
         .totals-grid{display:grid;grid-template-columns:1fr auto;gap:10px 32px;align-items:baseline}
-        .t-label{font-size:13px;color:rgba(255,255,255,.6)} .t-value{font-family:'Barlow Condensed',sans-serif;font-size:16px;font-weight:300;text-align:right}
-        .t-label.main{color:rgba(255,255,255,.9);font-weight:500} .t-value.main{font-size:28px}
+        .t-label{font-size:13px;color:rgba(255,255,255,.6)} .t-value{font-family:'Montserrat',sans-serif;font-size:16px;font-weight:700;text-align:right}
+        .t-label.main{font-family:'Montserrat',sans-serif;color:rgba(255,255,255,.9);font-weight:600} .t-value.main{font-size:26px;font-weight:800}
         .t-divider{grid-column:1/-1;border:none;border-top:1px solid rgba(255,255,255,.15);margin:8px 0}
         .totals-note{font-size:12px;color:rgba(255,255,255,.4);margin-top:16px}
-        .dealer-tools{margin-top:28px;background:var(--blue-light);border:1px solid #c8d8e8;border-radius:12px;padding:24px 28px}
-        .dealer-tools h3{font-family:'Barlow Condensed',sans-serif;font-size:18px;font-weight:400;color:var(--dealer-bg);margin-bottom:6px}
+        .dealer-tools{margin-top:28px;background:var(--blue-light);border:1px solid #c0d8ee;border-radius:12px;padding:24px 28px}
+        .dealer-tools h3{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--navy);margin-bottom:6px}
         .dealer-tools p{font-size:13px;color:var(--ink-light);margin-bottom:18px}
         .tools-row{display:flex;gap:12px;flex-wrap:wrap}
-        .btn{font-family:'Barlow',sans-serif;font-size:13px;font-weight:500;padding:10px 20px;border-radius:8px;border:none;cursor:pointer;transition:all .15s}
-        .btn-primary{background:var(--dealer-bg);color:white} .btn-primary:hover{background:#004a78}
-        .btn-secondary{background:white;color:var(--dealer-bg);border:1px solid #c8d8e8} .btn-secondary:hover{background:var(--paper)}
+        .btn{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:10px 22px;border-radius:27px;border:none;cursor:pointer;transition:all .15s}
+        .btn-primary{background:var(--blue);color:white} .btn-primary:hover{background:var(--navy)}
+        .btn-secondary{background:white;color:var(--blue);border:1px solid #c0d8ee} .btn-secondary:hover{background:var(--paper)}
         .customer-action{margin-top:28px;text-align:center;padding:32px;background:var(--white);border:1px solid var(--border);border-radius:12px}
         .customer-action p{font-size:14px;color:var(--ink-light);margin-bottom:16px}
-        .accept-btn{font-family:'Barlow',sans-serif;font-size:14px;font-weight:500;padding:14px 36px;background:var(--blue);color:white;border:none;border-radius:8px;cursor:pointer}
-        .accept-btn:hover{background:var(--dealer-bg)}
-        .notes-block{margin-top:28px;padding:20px 24px;background:var(--paper-warm);border:1px solid var(--border);border-radius:10px}
-        .notes-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);margin-bottom:8px}
+        .accept-btn{font-family:'Montserrat',sans-serif;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:14px 40px;background:var(--blue);color:white;border:none;border-radius:27px;cursor:pointer;transition:background .15s}
+        .accept-btn:hover{background:var(--navy)}
+        .notes-block{margin-top:28px;padding:20px 24px;background:var(--card-bg);border:1px solid var(--border);border-radius:10px}
+        .notes-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:8px}
         .notes-block p{font-size:13px;color:var(--ink-light);line-height:1.7}
         .quote-footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-        .footer-brand{font-size:11px;color:var(--ink-muted)} .footer-brand strong{color:var(--ink-light)}
+        .footer-brand{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:600;color:var(--ink-muted)} .footer-brand strong{color:var(--navy)}
         .footer-contact{font-size:11px;color:var(--ink-muted);text-align:right}
         @media print{.dealer-tools,.customer-action,.no-print{display:none!important} body{background:white}}
         @media(max-width:600px){.product-main{grid-template-columns:1fr} .price-col{border-left:none;border-top:1px solid var(--border);text-align:left} .parties{grid-template-columns:1fr}}
