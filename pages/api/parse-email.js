@@ -23,7 +23,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes }  from 'crypto'
 import { fetchProductBySku } from '../../lib/shopify'
-import { getAccessoriesForSku }                           from '../../lib/accessories'
+import { getAccessoriesForSku } from '../../lib/accessories'
+import { sendEmail, sellerNotificationEmail } from '../../lib/email'
 
 const adminClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -423,20 +424,25 @@ export default async function handler(req, res) {
     return res.status(200).json({ debug: true, parsed: parsedSummary, main_product, line_items })
   }
 
-  // ── 6. Insert quote into Supabase ──────────────────────────────────────────
+  // ── 6. Insert DRAFT quote into Supabase ───────────────────────────────────
+  // The quote starts as a draft. The CEPELO seller fills in dealer + customer
+  // details via /seller/[draft_token], which then flips status → 'sent' and
+  // emails the dealer.
   const token          = randomBytes(16).toString('hex')
   const customer_token = randomBytes(16).toString('hex')
+  const draft_token    = randomBytes(16).toString('hex')
   const validUntil     = new Date()
   validUntil.setDate(validUntil.getDate() + valid_days)
 
   const { error } = await adminClient.from('quotes').insert({
     token,
     customer_token,
+    draft_token,
     shopify_order_id:      subjectData.quote_ref || 'PARSED',
     type:                  subjectData.type,
     lang,
     category:              'other',
-    status:                'sent',
+    status:                'draft',
     sender_name:           '',
     sender_email:          process.env.DEFAULT_SENDER_EMAIL || '',
     sender_phone:          '',
@@ -458,14 +464,31 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Supabase error: ${error.message}` })
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL
+  const baseUrl        = process.env.NEXT_PUBLIC_BASE_URL
+  const sellerFormUrl  = `${baseUrl}/seller/${draft_token}`
+
+  // ── 7. Notify the CEPELO seller ────────────────────────────────────────────
+  const sellerEmail = process.env.DEFAULT_SENDER_EMAIL
+  if (sellerEmail) {
+    try {
+      const allProducts = [main_product, ...line_items.filter(i => i.sku !== 'DELIVERY')]
+      const tpl = sellerNotificationEmail({
+        dealerName:    address.company || subjectData.recipient_company || '',
+        quoteRef:      subjectData.quote_ref,
+        products:      allProducts,
+        sellerFormUrl,
+      })
+      await sendEmail({ to: sellerEmail, ...tpl })
+    } catch (emailErr) {
+      // Non-fatal – the quote was created; just log
+      console.warn('[parse-email] Seller notification email failed:', emailErr.message)
+    }
+  }
 
   return res.status(200).json({
     success:              true,
-    token,
-    customer_token,
-    quote_url:            `${baseUrl}/quote/${token}`,
-    customer_url:         `${baseUrl}/quote/${customer_token}`,
+    draft_token,
+    seller_form_url:      sellerFormUrl,
     parsed:               parsedSummary,
   })
 }
