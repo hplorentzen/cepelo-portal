@@ -151,7 +151,10 @@ function isNoiseLine(line) {
     /^(?:SKU|Varenr|Varenummer|Art\.?nr)/i.test(line) ||
     /^(?:Antal|Mængde|Qty|Quantity)\s*:/i.test(line) ||
     /^(?:Subtotal|Levering|Fragt|Forsendelse|Shipping|I\s+alt|Total|Moms|Skat)\b/i.test(line) ||
-    /^[\d.,\s]+(?:DKK|kr\.?)?$/i.test(line)
+    /^[\d.,\s]+(?:DKK|kr\.?)?$/i.test(line) ||
+    // CSS garbage: leaked from a style attribute when the context window starts
+    // mid-tag (e.g. the slice starts inside 'font-family:-apple-system,Blink…')
+    /font-family|font-size|BlinkMacSystemFont|Helvetica\s*Neue|sans-serif\s*[;,]|color\s*:#|padding\s*:/i.test(line)
   )
 }
 
@@ -173,7 +176,13 @@ function parseLineItems(html) {
     claimedRanges.push([Math.max(0, hit.index - 600), hit.index + 1000])
 
     // ── Text before and after the SKU label ────────────────────────────────
-    const beforeText = stripTags(html.slice(Math.max(0, hit.index - 500), hit.index))
+    // Strip any partial tag at the start of the window: if the slice begins
+    // mid-attribute (e.g. inside style="font-family:…") the opening '<' is
+    // outside the window, so stripTags can't remove it and CSS leaks as text.
+    // Removing everything up to the first '>' cleans that tail.
+    const beforeHtml = html.slice(Math.max(0, hit.index - 500), hit.index)
+                           .replace(/^[^<]*>/, '')
+    const beforeText = stripTags(beforeHtml)
     const rawAfter   = html.slice(hit.index + hit[0].length,
                                   Math.min(html.length, hit.index + 600))
     const afterText  = stripTags(rawAfter)
@@ -240,8 +249,11 @@ function parseLineItems(html) {
     // Skip if this price falls inside any SKU item's claimed context window
     if (claimedRanges.some(([a, b]) => pm.index >= a && pm.index <= b)) continue
 
-    // Get surrounding text (500 HTML chars before this price)
-    const beforeText = stripTags(html.slice(Math.max(0, pm.index - 500), pm.index))
+    // Get surrounding text (500 HTML chars before this price).
+    // Strip partial tag at window start (same fix as Pass 1).
+    const beforeText = stripTags(
+      html.slice(Math.max(0, pm.index - 500), pm.index).replace(/^[^<]*>/, '')
+    )
     const lines      = beforeText.split('\n').map(l => l.trim())
 
     // Skip if we're in a totals section
