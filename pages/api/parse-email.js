@@ -239,7 +239,8 @@ function parseLineItems(html) {
   // Scan for DKK prices that don't fall inside any SKU item's context window.
   // These are manually-added order lines such as "Montering", "Fragt", "Rabat".
   // The PRICE_RE constant is already defined at module scope.
-  const MANUAL_SKIP_RE = /^(?:Subtotal|Levering|Fragt|Forsendelse|Shipping|I\s+alt|Total\b|Moms|Skat|Ordrenummer|Betaling|Faktura|FORHANDLER|SLUTKUNDE|Tilbud\b|Draft\b|Betalings)/i
+  // Also skip "Rabat" and savings lines — those are handled by parseDiscounts()
+  const MANUAL_SKIP_RE = /^(?:Subtotal|Levering|Fragt|Forsendelse|Shipping|I\s+alt|Total\b|Moms|Skat|Ordrenummer|Betaling|Faktura|FORHANDLER|SLUTKUNDE|Tilbud\b|Draft\b|Betalings|Rabat\b|Du\s+har\s+sparet)/i
   const seenManualNames = new Set()
 
   for (const pm of html.matchAll(PRICE_RE)) {
@@ -295,6 +296,51 @@ function parseDelivery(html) {
   if (!m) return null
   const amount = parsePrice(m[1])
   return amount > 0 ? amount : null
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Discounts  –  "Rabat (CODE): X DKK" in totals, "Du har sparet X kr"
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseDiscounts(html) {
+  const text        = stripTags(html)
+  const lines       = text.split('\n').map(l => l.trim()).filter(Boolean)
+  const discounts   = []
+  const seenAmounts = new Set()        // prevents double-counting same amount
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    // ── "Du har sparet X kr [på denne ordre]" ──────────────────────────────
+    const savedM = line.match(/du\s+har\s+sparet\s+([\d.,]+\s*(?:DKK|kr\.?))/i)
+    if (savedM) {
+      const amount = parsePrice(savedM[1])
+      if (amount > 0 && !seenAmounts.has(amount)) {
+        seenAmounts.add(amount)
+        discounts.push({ sku: null, name: 'Besparelse', quantity: 1,
+          net_price: -amount, gross_price: -amount, type: 'discount' })
+      }
+      continue
+    }
+
+    // ── "Rabat" / "Rabat (CODE)" in totals section ─────────────────────────
+    if (/^Rabat\b/i.test(line)) {
+      // Price may be on the same line or the next
+      const context = [line, lines[i + 1] || ''].join(' ')
+      const priceM  = context.match(/([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:DKK|kr\.?)/i)
+      if (priceM) {
+        const amount = parsePrice(priceM[1])
+        if (amount > 0 && !seenAmounts.has(amount)) {
+          seenAmounts.add(amount)
+          const nameM = line.match(/^(Rabat(?:\s*\([^)]*\))?)/i)
+          discounts.push({ sku: null, name: (nameM && nameM[1]) || 'Rabat',
+            quantity: 1, net_price: -amount, gross_price: -amount, type: 'discount' })
+        }
+      }
+    }
+  }
+
+  return discounts
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -478,6 +524,10 @@ export default async function handler(req, res) {
     })
   }
 
+  // Discount lines ("Rabat (CODE)", "Du har sparet X kr")
+  const discounts = parseDiscounts(emailHtml)
+  discounts.forEach(d => line_items.push(d))
+
   // ── 4. Available accessories (static only — Shopify recs are too unpredictable) ───
   const mainSku              = first.sku
   const available_accessories = getAccessoriesForSku(mainSku)
@@ -505,12 +555,36 @@ export default async function handler(req, res) {
         net_price:   i.net_price,
         type:        'manual',
       })),
+      ...discounts.map(d => ({
+        sku:        null,
+        name:       d.name,
+        net_price:  d.net_price,
+        type:       'discount',
+      })),
     ],
     accessories_count: available_accessories.length,
+    discount_count:    discounts.length,
   }
 
   if (debug) {
-    return res.status(200).json({ debug: true, parsed: parsedSummary, main_product, line_items })
+    // Raw debug mode – return everything including pre-enrichment prices
+    return res.status(200).json({
+      debug:       true,
+      parsed:      parsedSummary,
+      main_product,
+      line_items,
+      raw: {
+        sku_items:     rawSkuItems.map(i => ({
+          sku: i.sku, name: i.name, quantity: i.quantity, net_price: i.net_price,
+        })),
+        manual_items:  rawManualItems,
+        discounts,
+        delivery,
+        subject:       subjectData,
+        address,
+        email_preview: stripTags(emailHtml).slice(0, 2000),
+      },
+    })
   }
 
   // ── 6. Insert DRAFT quote into Supabase ───────────────────────────────────

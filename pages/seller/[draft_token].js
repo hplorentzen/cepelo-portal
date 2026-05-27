@@ -64,8 +64,21 @@ function Textarea({ value, onChange, placeholder, rows = 3 }) {
 // Product summary strip (read-only, shown for context)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ProductStrip({ products }) {
-  if (!products.length) return null
+function ProductStrip({ mainProduct, lineItems }) {
+  const allItems = lineItems || []
+
+  // Regular products: SKU-based items, not special types
+  const products = [mainProduct, ...allItems.filter(i =>
+    i && !['manual', 'discount'].includes(i.type) && i.sku !== 'DELIVERY'
+  )].filter(Boolean)
+
+  // Extra lines: fragt, montering, levering, rabat
+  const extras = allItems.filter(i =>
+    i.type === 'manual' || i.sku === 'DELIVERY' || i.type === 'discount'
+  )
+
+  if (!products.length && !extras.length) return null
+
   return (
     <div className="product-strip">
       <div className="strip-label">Produkter i tilbuddet</div>
@@ -81,10 +94,31 @@ function ProductStrip({ products }) {
                 {p.sku && <span className="strip-sku">{p.sku}</span>}
                 {p.quantity > 1 && <span className="strip-qty">× {p.quantity}</span>}
                 {p.net_price > 0 && <span className="strip-price">Netto: {formatPrice(p.net_price, 'da')}</span>}
+                {p.gross_price > 0 && <span className="strip-gross">Brutto: {formatPrice(p.gross_price, 'da')}</span>}
               </div>
             </div>
           </div>
         ))}
+
+        {extras.length > 0 && (
+          <div className="strip-extras">
+            {extras.map((item, i) => {
+              const isDiscount = item.type === 'discount'
+              const amount     = isDiscount
+                ? `−${formatPrice(Math.abs(item.net_price || 0), 'da')}`
+                : formatPrice(item.gross_price || item.net_price || 0, 'da')
+              const label = isDiscount
+                ? `Rabat${item.name && item.name !== 'Besparelse' ? ` (${item.name})` : ''}`
+                : item.name
+              return (
+                <div key={i} className={`strip-extra-row${isDiscount ? ' is-discount' : ''}`}>
+                  <span className="extra-label">{label}</span>
+                  <span className={`extra-amount${isDiscount ? ' is-discount' : ''}`}>{amount}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -122,8 +156,7 @@ function SuccessScreen({ result, dealerEmail }) {
 
 export default function SellerFormPage({ quote, draft_token, prefill }) {
   // ── Form state ────────────────────────────────────────────────────────────
-  const [dealerName,    setDealerName]    = useState(prefill?.dealer_name    || '')
-  const [dealerAddress, setDealerAddress] = useState(prefill?.dealer_address || '')
+  const [dealerName,    setDealerName]    = useState(prefill?.dealer_name || '')
   const [dealerDept,    setDealerDept]    = useState('')
   const [dealerEmail,   setDealerEmail]   = useState('')
 
@@ -170,12 +203,6 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
     )
   }
 
-  // ── Products list for context strip ─────────────────────────────────────
-  const products = [
-    quote.main_product,
-    ...(quote.line_items || []).filter(i => !['accessory','software','subscription'].includes(i.type) && i.sku !== 'DELIVERY'),
-  ].filter(Boolean)
-
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -189,7 +216,6 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         body: JSON.stringify({
           draft_token,
           dealer_name:       dealerName,
-          dealer_address:    dealerAddress,
           dealer_dept:       dealerDept,
           dealer_email:      dealerEmail,
           recipient_company: custCompany,
@@ -249,6 +275,13 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         .strip-sku{font-size:11px;color:var(--muted);background:var(--paper);padding:1px 6px;border-radius:4px}
         .strip-qty{font-size:11px;color:var(--muted)}
         .strip-price{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:600;color:var(--navy)}
+        .strip-gross{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:600;color:var(--muted)}
+        .strip-extras{border-top:1px solid var(--border);margin-top:10px;padding-top:10px;display:flex;flex-direction:column;gap:4px}
+        .strip-extra-row{display:flex;justify-content:space-between;align-items:center;padding:2px 0}
+        .strip-extra-row.is-discount{}
+        .extra-label{font-size:13px;color:var(--ink)}
+        .extra-amount{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:600;color:var(--navy)}
+        .extra-amount.is-discount{color:var(--green)}
 
         /* Form sections */
         .form-sections{display:flex;flex-direction:column;gap:20px;margin-bottom:28px}
@@ -308,7 +341,7 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         <div className="page-header">
           <div className="header-left">
             <img src="/cepelo-logo.png" alt="CEPELO" />
-            <div className="tagline">Workshop Equipment Solutions</div>
+            <div className="tagline">Vi sikrer fremtidens værksted</div>
           </div>
           <div className="header-right">
             <div className="page-badge">⬤ Intern sælgerformular</div>
@@ -318,7 +351,7 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         </div>
 
         {/* Product context strip */}
-        <ProductStrip products={products} />
+        <ProductStrip mainProduct={quote.main_product} lineItems={quote.line_items} />
 
         {submitted ? (
           <SuccessScreen result={submitted} dealerEmail={dealerEmail} />
@@ -334,9 +367,6 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
                   </Field>
                   <Field label="Afdeling">
                     <Input value={dealerDept} onChange={setDealerDept} placeholder="Afdeling / att." />
-                  </Field>
-                  <Field label="Adresse" required={false}>
-                    <Input value={dealerAddress} onChange={setDealerAddress} placeholder="Gadenavn, by" />
                   </Field>
                   <Field label="Email tilbuddet sendes til" required>
                     <Input value={dealerEmail} onChange={setDealerEmail} placeholder="forhandler@firma.dk" type="email" />
@@ -442,13 +472,6 @@ export async function getServerSideProps({ params }) {
 
   if (error || !quote) return { props: { quote: null, draft_token: params.draft_token, prefill: {} } }
 
-  // Extract delivery address from notes for pre-filling
-  const rawNotes     = quote.notes || ''
-  const addrPrefix   = 'Leveringsadresse: '
-  const dealer_address = rawNotes.startsWith(addrPrefix)
-    ? rawNotes.slice(addrPrefix.length)
-    : rawNotes
-
   return {
     props: {
       draft_token: params.draft_token,
@@ -462,8 +485,7 @@ export async function getServerSideProps({ params }) {
         lang:             quote.lang          || 'da',
       },
       prefill: {
-        dealer_name:    quote.dealer_name    || '',
-        dealer_address: dealer_address       || '',
+        dealer_name: quote.dealer_name || '',
       },
     },
   }
