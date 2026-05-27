@@ -185,9 +185,13 @@ function parseLineItems(html) {
     const beforeText = stripTags(beforeHtml)
     // Use hit.index + 1000 to match the claimedRanges width — avoids a dead
     // zone where prices are claimed (Pass 2 skips them) but not searched.
-    const rawAfter   = html.slice(hit.index + hit[0].length,
-                                  Math.min(html.length, hit.index + 1000))
-    const afterText  = stripTags(rawAfter)
+    const rawAfter      = html.slice(hit.index + hit[0].length,
+                                     Math.min(html.length, hit.index + 1000))
+    // Remove strikethrough elements (original/crossed-out prices) before text extraction
+    // so that e.g. <s>160.000,00 kr</s> doesn't bleed into the price search.
+    const rawAfterClean = rawAfter
+      .replace(/<(?:s|del|strike)\b[^>]*>[\s\S]*?<\/(?:s|del|strike)>/gi, ' ')
+    const afterText     = stripTags(rawAfterClean)
 
     // Truncate afterText at "Subtotal / I alt / Total" to avoid grand-total bleed
     const stopIdx   = afterText.search(/\b(?:Subtotal|I\s+alt|Total)\b/i)
@@ -227,11 +231,34 @@ function parseLineItems(html) {
       if (standaloneQty) quantity = parseInt(standaloneQty)
     }
 
-    // ── Price (first valid DKK amount after SKU, before totals) ──────────────
-    // Using the FIRST match rather than last to avoid grand-total bleed-in.
-    const priceHits   = [...priceZone.matchAll(PRICE_RE)]
-    const validPrices = priceHits.filter(p => parsePrice(p[0]) >= 10)
-    const net_price   = validPrices.length ? parsePrice(validPrices[0][0]) : 0
+    // ── Price ──────────────────────────────────────────────────────────────────
+    // Strategy 1 (primary): Shopify's "order-listitem-price" element always holds
+    // the actual charged price, even when a discount label like
+    // "TILPASSET RABAT (-15.000,00 kr)" appears in the same product cell.
+    // Handles direct email variant ("order-listitem-price") and Outlook-forwarded
+    // variants ("x_order-list__item-price", "x_x_order-list__item-price").
+    let net_price    = 0
+    const shopifyPriceRe = /class="[^"]*(?:order-listitem-price|order-list[^"]{0,10}item-price)[^"]*"[^>]*>([\s\S]{1,300}?)(?=<\/[a-zA-Z])/i
+    const itemPriceHit   = rawAfterClean.match(shopifyPriceRe)
+    if (itemPriceHit) {
+      const content = stripTags(itemPriceHit[1])
+      const pm      = content.match(/([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:DKK|kr\.?)/i)
+      if (pm) net_price = parsePrice(pm[0])
+    }
+
+    // Strategy 2 (fallback): first price in priceZone that isn't a discount amount.
+    // Discount amounts appear as "(-15.000,00 kr)" — a minus sign or open-paren
+    // immediately precedes the number in the stripped text, so filter those out.
+    if (!net_price) {
+      const priceHits   = [...priceZone.matchAll(PRICE_RE)]
+      const validPrices = priceHits.filter(p => {
+        if (parsePrice(p[0]) < 10) return false
+        // Skip amounts preceded by a minus sign or open-paren (discount labels)
+        const preceding = priceZone.slice(Math.max(0, p.index - 3), p.index)
+        return !/[-−(]/.test(preceding)
+      })
+      net_price = validPrices.length ? parsePrice(validPrices[0][0]) : 0
+    }
 
     seen.add(sku)
     items.push({ sku, name: name.slice(0, 200), quantity, net_price })
