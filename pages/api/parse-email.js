@@ -298,15 +298,22 @@ export default async function handler(req, res) {
   }
 
   const {
-    subject    = '',
+    subject      = '',
     body_html,
     html: html_field,
-    lang       = 'da',
-    valid_days = 30,
+    lang         = 'da',
+    valid_days   = 30,
+    seller_email = '',   // Power Automate: @{triggerOutputs()?['body/from']}
   } = req.body
 
-  const debug    = req.query.debug === '1'
+  const debug     = req.query.debug === '1'
   const emailHtml = body_html || html_field || ''
+
+  // Parse "Name <email>" or bare "email" from the From header value
+  // Power Automate sends body/from as the full RFC 5322 address string.
+  const fromMatch    = seller_email.match(/^(.+?)\s*<([^>]+)>/)
+  const sellerName   = fromMatch ? fromMatch[1].trim() : ''
+  const sellerAddr   = fromMatch ? fromMatch[2].trim() : seller_email.trim()
 
   if (!emailHtml) return res.status(400).json({ error: 'body_html (or html) is required' })
 
@@ -443,8 +450,8 @@ export default async function handler(req, res) {
     lang,
     category:              'other',
     status:                'draft',
-    sender_name:           '',
-    sender_email:          process.env.DEFAULT_SENDER_EMAIL || '',
+    sender_name:           sellerName || '',
+    sender_email:          sellerAddr || process.env.DEFAULT_SENDER_EMAIL || '',
     sender_phone:          '',
     recipient_name:        '',
     recipient_company:     subjectData.recipient_company || '',
@@ -468,8 +475,9 @@ export default async function handler(req, res) {
   const sellerFormUrl  = `${baseUrl}/seller/${draft_token}`
 
   // ── 7. Notify the CEPELO seller ────────────────────────────────────────────
-  const sellerEmail = process.env.DEFAULT_SENDER_EMAIL
-  if (sellerEmail) {
+  // Use the extracted sender address if available, fall back to DEFAULT_SENDER_EMAIL
+  const notifyEmail = sellerAddr || process.env.DEFAULT_SENDER_EMAIL
+  if (notifyEmail) {
     try {
       const allProducts = [main_product, ...line_items.filter(i => i.sku !== 'DELIVERY')]
       const tpl = sellerNotificationEmail({
@@ -478,7 +486,7 @@ export default async function handler(req, res) {
         products:      allProducts,
         sellerFormUrl,
       })
-      await sendEmail({ to: sellerEmail, ...tpl })
+      await sendEmail({ to: notifyEmail, ...tpl })
     } catch (emailErr) {
       // Non-fatal – the quote was created; just log
       console.warn('[parse-email] Seller notification email failed:', emailErr.message)
@@ -489,6 +497,7 @@ export default async function handler(req, res) {
     success:              true,
     draft_token,
     seller_form_url:      sellerFormUrl,
+    seller_email:         sellerAddr || null,
     parsed:               parsedSummary,
   })
 }
