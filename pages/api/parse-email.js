@@ -363,6 +363,7 @@ export default async function handler(req, res) {
 
   // ── 3. Build main_product + line_items ────────────────────────────────────
   const [first, ...rest] = enriched
+  const isCustomerQuote  = subjectData.type === 'customer'
 
   function buildProduct(item) {
     const s = item.shopify
@@ -374,18 +375,20 @@ export default async function handler(req, res) {
         description_html:   s.description_html,
         image_url:          s.image_url,
         images:             s.images,
-        gross_price:        s.gross_price,
         currency:           s.currency,
         vendor:             s.vendor,
         product_type:       s.product_type,
         shopify_handle:     s.handle,
         shopify_product_id: s.shopify_product_id,
       }),
-      // Fields from the email (net price from email is the agreed/quoted price)
-      sku:       item.sku,
-      name:      s?.name || item.name,
-      quantity:  item.quantity,
-      net_price: item.net_price,   // email price = what was quoted to the customer
+      sku:      item.sku,
+      name:     s?.name || item.name,
+      quantity: item.quantity,
+      // Price semantics differ by type:
+      //   dealer   → email price = net (dealer cost); Shopify gross = suggested retail
+      //   customer → email price IS the gross (agreed customer price); no net concept
+      net_price:   isCustomerQuote ? 0            : item.net_price,
+      gross_price: isCustomerQuote ? item.net_price : (s?.gross_price || 0),
     }
   }
 

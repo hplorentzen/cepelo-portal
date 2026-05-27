@@ -70,11 +70,12 @@ export default async function handler(req, res) {
   }
 
   // ── 3. Build dealer notes (seller message + address context) ─────────────
+  const s = (v) => (v || '').trim()
   const noteParts = []
-  if (notes.trim()) noteParts.push(notes.trim())
-  if (dealer_dept.trim()) noteParts.push(`Afdeling: ${dealer_dept.trim()}`)
-  if (dealer_address.trim()) noteParts.push(`Leveringsadresse: ${dealer_address.trim()}`)
-  if (recipient_address.trim()) noteParts.push(`Slutkunde adresse: ${recipient_address.trim()}`)
+  if (s(notes))             noteParts.push(s(notes))
+  if (s(dealer_dept))       noteParts.push(`Afdeling: ${s(dealer_dept)}`)
+  if (s(dealer_address))    noteParts.push(`Leveringsadresse: ${s(dealer_address)}`)
+  if (s(recipient_address)) noteParts.push(`Slutkunde adresse: ${s(recipient_address)}`)
   const fullNotes = noteParts.join('\n')
 
   // ── 4. Update quote in Supabase ────────────────────────────────────────────
@@ -121,9 +122,11 @@ export default async function handler(req, res) {
       senderName:  quote.sender_name || 'CEPELO Salgsteam',
     })
     await sendEmail({ to: dealer_email, ...tpl })
+    console.log(`[submit-seller-form] Dealer email sent to ${dealer_email} for quote ${quote.shopify_order_id}`)
   } catch (emailErr) {
-    // Non-fatal — quote is updated, just log
-    console.warn('[submit-seller-form] Dealer email failed:', emailErr.message)
+    // Non-fatal — quote is updated in DB even if email fails; log full error for Vercel logs
+    console.error('[submit-seller-form] Dealer email failed:', emailErr.message)
+    console.error('[submit-seller-form] Email error detail:', emailErr)
   }
 
   return res.status(200).json({

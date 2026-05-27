@@ -193,15 +193,16 @@ export default function QuotePage({ quote }) {
           </div>
         </div>
 
-        <div className="parties">
-          <div className="party-card">
+        {/* Customer view: only "Slutkunde" card (no dealer card — dealer is CEPELO's internal relation) */}
+        <div className="parties" style={!isDealer ? {gridTemplateColumns:'1fr',maxWidth:400} : {}}>
+          {isDealer && <div className="party-card">
             <div className="party-role">Forhandler</div>
             <div className="party-name">{quote.dealer_name || '—'}</div>
             <div className="party-details">
               {quote.dealer_email && <>{quote.dealer_email}<br /></>}
               {quote.dealer_phone && <>{quote.dealer_phone}</>}
             </div>
-          </div>
+          </div>}
           <div className="party-card">
             <div className="party-role">Slutkunde</div>
             <div className="party-name">{quote.recipient_company || quote.recipient_name || '—'}</div>
