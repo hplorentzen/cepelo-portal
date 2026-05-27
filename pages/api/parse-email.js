@@ -162,11 +162,15 @@ function parseLineItems(html) {
   // For each SKU occurrence in the raw HTML, grab ±800 chars of context.
   // This captures both the product-name cell (before the SKU) and the price
   // cell (sibling <td> after), regardless of nesting depth.
-  const skuHits = [...html.matchAll(SKU_RE_G)]
+  const skuHits       = [...html.matchAll(SKU_RE_G)]
+  const claimedRanges = []  // HTML char ranges "owned" by SKU items (used in Pass 2)
 
   for (const hit of skuHits) {
     const sku = hit[1].toUpperCase()
     if (seen.has(sku)) continue
+
+    // Record the context window so Pass 2 won't re-capture this item's price
+    claimedRanges.push([Math.max(0, hit.index - 600), hit.index + 1000])
 
     // ── Text before and after the SKU label ────────────────────────────────
     const beforeText = stripTags(html.slice(Math.max(0, hit.index - 500), hit.index))
@@ -220,6 +224,48 @@ function parseLineItems(html) {
 
     seen.add(sku)
     items.push({ sku, name: name.slice(0, 200), quantity, net_price })
+  }
+
+  // ── Pass 2: manual lines (no SKU label) ───────────────────────────────────
+  // Scan for DKK prices that don't fall inside any SKU item's context window.
+  // These are manually-added order lines such as "Montering", "Fragt", "Rabat".
+  // The PRICE_RE constant is already defined at module scope.
+  const MANUAL_SKIP_RE = /^(?:Subtotal|Levering|Fragt|Forsendelse|Shipping|I\s+alt|Total\b|Moms|Skat|Ordrenummer|Betaling|Faktura|FORHANDLER|SLUTKUNDE|Tilbud\b|Draft\b|Betalings)/i
+  const seenManualNames = new Set()
+
+  for (const pm of html.matchAll(PRICE_RE)) {
+    const price = parsePrice(pm[0])
+    if (price < 10) continue
+
+    // Skip if this price falls inside any SKU item's claimed context window
+    if (claimedRanges.some(([a, b]) => pm.index >= a && pm.index <= b)) continue
+
+    // Get surrounding text (500 HTML chars before this price)
+    const beforeText = stripTags(html.slice(Math.max(0, pm.index - 500), pm.index))
+    const lines      = beforeText.split('\n').map(l => l.trim())
+
+    // Skip if we're in a totals section
+    if (/(?:Subtotal|I\s+alt|Total\b|Moms\b|Skat\b)/i.test(lines.slice(-4).join(' '))) continue
+
+    // Last meaningful, non-noise, non-totals line = product name
+    const nameCands = lines.filter(l =>
+      !isNoiseLine(l) && !MANUAL_SKIP_RE.test(l) && l.length < 200
+    )
+    if (!nameCands.length) continue
+
+    const name    = nameCands[nameCands.length - 1].slice(0, 200)
+    const nameKey = name.toLowerCase()
+    if (seenManualNames.has(nameKey)) continue
+    seenManualNames.add(nameKey)
+
+    items.push({
+      sku:         null,
+      name,
+      quantity:    1,
+      net_price:   price,
+      gross_price: price,
+      type:        'manual',
+    })
   }
 
   return items
@@ -334,11 +380,13 @@ export default async function handler(req, res) {
     if (custM)   { subjectData.type = 'customer'; subjectData.recipient_company = custM[1].trim() }
   }
 
-  const rawItems = parseLineItems(emailHtml)
-  const delivery = parseDelivery(emailHtml)
-  const address  = parseAddress(emailHtml)
+  const rawItems       = parseLineItems(emailHtml)
+  const rawSkuItems    = rawItems.filter(i => i.type !== 'manual')
+  const rawManualItems = rawItems.filter(i => i.type === 'manual')
+  const delivery       = parseDelivery(emailHtml)
+  const address        = parseAddress(emailHtml)
 
-  if (rawItems.length === 0) {
+  if (rawSkuItems.length === 0) {
     return res.status(422).json({
       error:   'No line items with SKUs found in email body',
       hint:    'Ensure the email contains "SKU: XXXXX" for each product',
@@ -347,9 +395,9 @@ export default async function handler(req, res) {
     })
   }
 
-  // ── 2. Shopify enrichment for all SKUs (parallel) ─────────────────────────
+  // ── 2. Shopify enrichment for SKU items only (manual lines skip Shopify) ──
   const enriched = await Promise.all(
-    rawItems.map(async item => {
+    rawSkuItems.map(async item => {
       let shopify = null
       try {
         shopify = await fetchProductBySku(item.sku)
@@ -396,6 +444,16 @@ export default async function handler(req, res) {
 
   const line_items = rest.map(buildProduct)
 
+  // Append manual lines verbatim (no Shopify enrichment; prices are fixed)
+  rawManualItems.forEach(item => line_items.push({
+    sku:         null,
+    name:        item.name,
+    quantity:    1,
+    net_price:   isCustomerQuote ? 0               : item.net_price,
+    gross_price: isCustomerQuote ? item.net_price   : item.gross_price,
+    type:        'manual',
+  }))
+
   // Delivery as a synthetic line item when present
   if (delivery !== null) {
     line_items.push({
@@ -420,13 +478,22 @@ export default async function handler(req, res) {
     dealer_name:        address.company,
     delivery,
     address:            address.address,
-    items: enriched.map(i => ({
-      sku:         i.sku,
-      name:        i.shopify?.name || i.name,
-      quantity:    i.quantity,
-      net_price:   i.net_price,
-      shopify_ok:  !!i.shopify,
-    })),
+    items: [
+      ...enriched.map(i => ({
+        sku:         i.sku,
+        name:        i.shopify?.name || i.name,
+        quantity:    i.quantity,
+        net_price:   i.net_price,
+        shopify_ok:  !!i.shopify,
+      })),
+      ...rawManualItems.map(i => ({
+        sku:         null,
+        name:        i.name,
+        quantity:    i.quantity,
+        net_price:   i.net_price,
+        type:        'manual',
+      })),
+    ],
     accessories_count: available_accessories.length,
   }
 

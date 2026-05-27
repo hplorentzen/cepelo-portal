@@ -34,7 +34,9 @@ export default function QuotePage({ quote }) {
 
   const accessories    = quote.available_accessories || []
   // Product line items: regular products from the order (no type or type='product')
-  const productLineItems = (quote.line_items || []).filter(i => !['accessory','software','subscription'].includes(i.type))
+  // Manual lines (type='manual') are rendered separately below
+  const productLineItems = (quote.line_items || []).filter(i => !['accessory','software','subscription','manual'].includes(i.type))
+  const manualLineItems  = (quote.line_items || []).filter(i => i.type === 'manual')
   // Typed sub-items shown inside the main product block
   const hardware      = (quote.line_items || []).filter(i => i.type === 'accessory')
   const software      = (quote.line_items || []).filter(i => i.type === 'software')
@@ -293,6 +295,18 @@ export default function QuotePage({ quote }) {
               </div>
             </div>
           })}
+        </>}
+        {manualLineItems.length > 0 && <>
+          <div className="section-title" style={{marginTop:24}}>Øvrige poster</div>
+          <div className="product-block" style={{marginBottom:8}}>
+            {manualLineItems.map((item, idx) => (
+              <div key={idx} className="sub-item" style={{borderTop:idx===0?'none':undefined}}>
+                <div><div className="item-name" style={{fontSize:15}}>{item.name}</div></div>
+                <div className="item-qty">1 stk.</div>
+                <div className="item-price">{formatPrice(item.gross_price || item.net_price, lang)}</div>
+              </div>
+            ))}
+          </div>
         </>}
         </>}
 
