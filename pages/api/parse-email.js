@@ -83,9 +83,9 @@ function parsePrice(raw) {
   // "44995,00" or "150,00" – bare decimal comma
   } else if (/,\d{1,2}$/.test(s)) {
     n = parseFloat(s.replace(',', '.'))
-  // "44.995" – may be thousands-separated integer
-  } else if (/^\d{1,3}\.\d{3}$/.test(s)) {
-    n = parseFloat(s.replace('.', ''))
+  // "44.995" / "1.135.000" – thousands-separated integer (one or more groups)
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    n = parseFloat(s.replace(/\./g, ''))
   } else {
     n = parseFloat(s.replace(',', ''))
   }
@@ -180,11 +180,13 @@ function parseLineItems(html) {
     // mid-attribute (e.g. inside style="font-family:…") the opening '<' is
     // outside the window, so stripTags can't remove it and CSS leaks as text.
     // Removing everything up to the first '>' cleans that tail.
-    const beforeHtml = html.slice(Math.max(0, hit.index - 500), hit.index)
+    const beforeHtml = html.slice(Math.max(0, hit.index - 600), hit.index)
                            .replace(/^[^<]*>/, '')
     const beforeText = stripTags(beforeHtml)
+    // Use hit.index + 1000 to match the claimedRanges width — avoids a dead
+    // zone where prices are claimed (Pass 2 skips them) but not searched.
     const rawAfter   = html.slice(hit.index + hit[0].length,
-                                  Math.min(html.length, hit.index + 600))
+                                  Math.min(html.length, hit.index + 1000))
     const afterText  = stripTags(rawAfter)
 
     // Truncate afterText at "Subtotal / I alt / Total" to avoid grand-total bleed
@@ -410,8 +412,20 @@ export default async function handler(req, res) {
     seller_email = '',   // Power Automate: @{triggerOutputs()?['body/from']}
   } = req.body
 
-  const debug     = req.query.debug === '1'
-  const emailHtml = body_html || html_field || ''
+  const debug = req.query.debug === '1'
+
+  // ── Normalise HTML before any parsing ────────────────────────────────────
+  // 1. &nbsp; / &#160; → space: prevents "Varenummer:&nbsp;AUT100003960" from
+  //    breaking the SKU regex whose \s* cannot match HTML entity literals.
+  // 2. Swap "DKK 135.000,00" → "135.000,00 DKK": Shopify sometimes puts the
+  //    currency symbol BEFORE the number; PRICE_RE expects it after.
+  const emailHtml = (body_html || html_field || '')
+    .replace(/&nbsp;/g,  ' ')
+    .replace(/&#160;/g,  ' ')
+    .replace(
+      /(DKK|kr\.?)\s+([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)/gi,
+      '$2 $1'
+    )
 
   // Parse "Name <email>" or bare "email" from the From header value
   // Power Automate sends body/from as the full RFC 5322 address string.
@@ -567,13 +581,25 @@ export default async function handler(req, res) {
   }
 
   if (debug) {
-    // Raw debug mode – return everything including pre-enrichment prices
+    // Raw debug mode – return everything including pre-enrichment prices.
+    // sku_regex_hits: every occurrence the SKU regex found (before dedup/seen check)
+    // — lets you verify that "&nbsp;" normalisation fixed missing SKUs.
+    const skuRegexHits = [...emailHtml.matchAll(
+      /\b(?:SKU|Varenr\.?|Varenummer)\s*:?\s*([A-Z0-9][A-Z0-9\-_]{2,35})\b/gi
+    )].map(m => ({
+      sku:     m[1].toUpperCase(),
+      fullMatch: m[0],
+      index:   m.index,
+      context: emailHtml.slice(Math.max(0, m.index - 60), m.index + 80).replace(/\s+/g, ' '),
+    }))
+
     return res.status(200).json({
       debug:       true,
       parsed:      parsedSummary,
       main_product,
       line_items,
       raw: {
+        sku_regex_hits: skuRegexHits,
         sku_items:     rawSkuItems.map(i => ({
           sku: i.sku, name: i.name, quantity: i.quantity, net_price: i.net_price,
         })),
