@@ -158,11 +158,13 @@ function isNoiseLine(line) {
   )
 }
 
-function parseLineItems(html) {
+// debugCollector is optional; when provided it is populated with per-SKU price
+// strategy details and per-hit Pass 2 skip reasons for the ?debug=1 endpoint.
+function parseLineItems(html, debugCollector = null) {
   const items = []
   const seen  = new Set()
 
-  // For each SKU occurrence in the raw HTML, grab ±800 chars of context.
+  // For each SKU occurrence in the raw HTML, grab ±600/+1000 chars of context.
   // This captures both the product-name cell (before the SKU) and the price
   // cell (sibling <td> after), regardless of nesting depth.
   const skuHits       = [...html.matchAll(SKU_RE_G)]
@@ -172,23 +174,19 @@ function parseLineItems(html) {
     const sku = hit[1].toUpperCase()
     if (seen.has(sku)) continue
 
-    // Record the context window so Pass 2 won't re-capture this item's price
-    claimedRanges.push([Math.max(0, hit.index - 600), hit.index + 1000])
+    // Record the context window so Pass 2 won't re-capture this item's price.
+    // Forward claim is 700 chars (not 1000) so manual items just after the last
+    // SKU row are not accidentally swallowed; rawAfter still searches 1000 chars.
+    claimedRanges.push([Math.max(0, hit.index - 600), hit.index + 700])
 
     // ── Text before and after the SKU label ────────────────────────────────
-    // Strip any partial tag at the start of the window: if the slice begins
-    // mid-attribute (e.g. inside style="font-family:…") the opening '<' is
-    // outside the window, so stripTags can't remove it and CSS leaks as text.
-    // Removing everything up to the first '>' cleans that tail.
     const beforeHtml = html.slice(Math.max(0, hit.index - 600), hit.index)
                            .replace(/^[^<]*>/, '')
     const beforeText = stripTags(beforeHtml)
-    // Use hit.index + 1000 to match the claimedRanges width — avoids a dead
-    // zone where prices are claimed (Pass 2 skips them) but not searched.
     const rawAfter      = html.slice(hit.index + hit[0].length,
                                      Math.min(html.length, hit.index + 1000))
-    // Remove strikethrough elements (original/crossed-out prices) before text extraction
-    // so that e.g. <s>160.000,00 kr</s> doesn't bleed into the price search.
+    // Remove strikethrough elements (original/crossed-out prices) before text
+    // extraction so that e.g. <s>160.000,00 kr</s> never enters PRICE_RE.
     const rawAfterClean = rawAfter
       .replace(/<(?:s|del|strike)\b[^>]*>[\s\S]*?<\/(?:s|del|strike)>/gi, ' ')
     const afterText     = stripTags(rawAfterClean)
@@ -202,15 +200,11 @@ function parseLineItems(html) {
     const nameCands   = beforeLines.filter(l => !isNoiseLine(l))
     const rawName     = nameCands[nameCands.length - 1] || sku
     // Strip trailing "× qty" suffix — some templates embed qty in the title line
-    // e.g. "AUTEL EV-pakke til Ultra + 909 × 1" → "AUTEL EV-pakke til Ultra + 909"
     const name = rawName.replace(/\s*[×xX]\s*\d+\s*$/, '').trim().slice(0, 200)
 
     // ── Quantity ──────────────────────────────────────────────────────────────
     // Priority 1: "name × qty" at end of a line in the before-text
-    //   e.g. "AUTEL EV-pakke til Ultra + 909 × 1\nVarenummer: ..."
-    //   QTY_AFTER_X_RE captures the number AFTER × at end-of-line.
     // Priority 2: "qty × price" in the after-text (standard Shopify inline)
-    //   e.g. "2 × 1.438,00 DKK" — QTY_BEFORE_X_RE captures the number BEFORE ×.
     // Priority 3: "Antal: N" label
     // Priority 4: standalone integer on its own line (bare <td>N</td>)
     const lastBeforeLines = beforeLines.slice(-5).join('\n')
@@ -232,32 +226,62 @@ function parseLineItems(html) {
     }
 
     // ── Price ──────────────────────────────────────────────────────────────────
-    // Strategy 1 (primary): Shopify's "order-listitem-price" element always holds
-    // the actual charged price, even when a discount label like
-    // "TILPASSET RABAT (-15.000,00 kr)" appears in the same product cell.
-    // Handles direct email variant ("order-listitem-price") and Outlook-forwarded
-    // variants ("x_order-list__item-price", "x_x_order-list__item-price").
-    let net_price    = 0
+    let net_price  = 0
+    let dbgStrat   = 'none'
+    let dbgS1Match = null
+    let dbgS2List  = null
+
+    // Strategy 1 (primary): Shopify's "order-listitem-price" class element always
+    // holds the actual charged price. Handles direct email and Outlook x_/x_x_
+    // prefixed variants ("x_x_order-list__item-price" etc).
     const shopifyPriceRe = /class="[^"]*(?:order-listitem-price|order-list[^"]{0,10}item-price)[^"]*"[^>]*>([\s\S]{1,300}?)(?=<\/[a-zA-Z])/i
     const itemPriceHit   = rawAfterClean.match(shopifyPriceRe)
     if (itemPriceHit) {
       const content = stripTags(itemPriceHit[1])
+      dbgS1Match    = content.slice(0, 80)
       const pm      = content.match(/([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:DKK|kr\.?)/i)
-      if (pm) net_price = parsePrice(pm[0])
+      if (pm) {
+        net_price = parsePrice(pm[0])
+        dbgStrat  = 'strategy1_class'
+      }
     }
 
-    // Strategy 2 (fallback): first price in priceZone that isn't a discount amount.
-    // Discount amounts appear as "(-15.000,00 kr)" — a minus sign or open-paren
-    // immediately precedes the number in the stripped text, so filter those out.
+    // Strategy 2 (fallback): scan priceZone text, skip discount amounts.
+    // When a campaign/discount label is detected Shopify always orders prices as
+    // [original → charged], so take the LAST valid price (the charged one).
+    // Without a discount label a single price is expected; take the first.
     if (!net_price) {
+      const hasDiscount = /TILPASSET\s+RABAT|KAMPAGNE\s*\(|RABAT\s*\(/i.test(priceZone)
       const priceHits   = [...priceZone.matchAll(PRICE_RE)]
       const validPrices = priceHits.filter(p => {
         if (parsePrice(p[0]) < 10) return false
-        // Skip amounts preceded by a minus sign or open-paren (discount labels)
+        // Skip amounts immediately preceded by '-', '−', or '(' (discount labels)
         const preceding = priceZone.slice(Math.max(0, p.index - 3), p.index)
         return !/[-−(]/.test(preceding)
       })
-      net_price = validPrices.length ? parsePrice(validPrices[0][0]) : 0
+      if (debugCollector) dbgS2List = validPrices.map(p => parsePrice(p[0]))
+      const candidate = (hasDiscount && validPrices.length > 1)
+        ? validPrices[validPrices.length - 1]   // charged price is LAST when discount present
+        : validPrices[0]
+      if (candidate) {
+        net_price = parsePrice(candidate[0])
+        dbgStrat  = hasDiscount && validPrices.length > 1
+          ? 'strategy2_last_discount'
+          : 'strategy2_first'
+      }
+    }
+
+    if (debugCollector) {
+      debugCollector.priceStrategies.push({
+        sku,
+        strategy1_matched:   !!itemPriceHit,
+        strategy1_content:   dbgS1Match,
+        strategy2_prices:    dbgS2List,
+        has_discount_label:  /TILPASSET\s+RABAT|KAMPAGNE\s*\(|RABAT\s*\(/i.test(priceZone),
+        price_zone_preview:  priceZone.slice(0, 300).replace(/\s+/g, ' '),
+        strategy_used:       dbgStrat,
+        net_price,
+      })
     }
 
     seen.add(sku)
@@ -266,9 +290,8 @@ function parseLineItems(html) {
 
   // ── Pass 2: manual lines (no SKU label) ───────────────────────────────────
   // Scan for DKK prices that don't fall inside any SKU item's context window.
-  // These are manually-added order lines such as "Montering", "Fragt", "Rabat".
-  // The PRICE_RE constant is already defined at module scope.
-  // Also skip "Rabat" and savings lines — those are handled by parseDiscounts()
+  // These are manually-added order lines: "Montering", "Diverse olie" etc.
+  // Skip "Rabat" / savings lines — handled by parseDiscounts().
   const MANUAL_SKIP_RE = /^(?:Subtotal|Levering|Fragt|Forsendelse|Shipping|I\s+alt|Total\b|Moms|Skat|Ordrenummer|Betaling|Faktura|FORHANDLER|SLUTKUNDE|Tilbud\b|Draft\b|Betalings|Rabat\b|Du\s+har\s+sparet)/i
   const seenManualNames = new Set()
 
@@ -277,28 +300,53 @@ function parseLineItems(html) {
     if (price < 10) continue
 
     // Skip if this price falls inside any SKU item's claimed context window
-    if (claimedRanges.some(([a, b]) => pm.index >= a && pm.index <= b)) continue
+    const claimedBy = claimedRanges.filter(([a, b]) => pm.index >= a && pm.index <= b)
+    if (claimedBy.length) {
+      if (debugCollector) debugCollector.pass2.push({
+        price, pos: pm.index, skip: 'in_claimed_range',
+        claimed_by: claimedBy.map(([a, b]) => `[${a}–${b}]`).join(', '),
+        match: pm[0],
+      })
+      continue
+    }
 
-    // Get surrounding text (500 HTML chars before this price).
-    // Strip partial tag at window start (same fix as Pass 1).
+    // Get surrounding text (500 HTML chars before this price)
     const beforeText = stripTags(
       html.slice(Math.max(0, pm.index - 500), pm.index).replace(/^[^<]*>/, '')
     )
-    const lines      = beforeText.split('\n').map(l => l.trim())
+    const lines = beforeText.split('\n').map(l => l.trim())
 
     // Skip if we're in a totals section
-    if (/(?:Subtotal|I\s+alt|Total\b|Moms\b|Skat\b)/i.test(lines.slice(-4).join(' '))) continue
+    const tailText = lines.slice(-4).join(' ')
+    if (/(?:Subtotal|I\s+alt|Total\b|Moms\b|Skat\b)/i.test(tailText)) {
+      if (debugCollector) debugCollector.pass2.push({
+        price, pos: pm.index, skip: 'totals_section',
+        context: tailText.slice(0, 120),
+      })
+      continue
+    }
 
     // Last meaningful, non-noise, non-totals line = product name
     const nameCands = lines.filter(l =>
       !isNoiseLine(l) && !MANUAL_SKIP_RE.test(l) && l.length < 200
     )
-    if (!nameCands.length) continue
+    if (!nameCands.length) {
+      if (debugCollector) debugCollector.pass2.push({
+        price, pos: pm.index, skip: 'no_name_candidate',
+        last_lines: lines.slice(-5).join(' | ').slice(0, 200),
+      })
+      continue
+    }
 
     const name    = nameCands[nameCands.length - 1].slice(0, 200)
     const nameKey = name.toLowerCase()
-    if (seenManualNames.has(nameKey)) continue
+    if (seenManualNames.has(nameKey)) {
+      if (debugCollector) debugCollector.pass2.push({ price, pos: pm.index, skip: 'duplicate_name', name })
+      continue
+    }
     seenManualNames.add(nameKey)
+
+    if (debugCollector) debugCollector.pass2.push({ price, pos: pm.index, skip: null, name, included: true })
 
     items.push({
       sku:         null,
@@ -479,7 +527,8 @@ export default async function handler(req, res) {
     if (custM)   { subjectData.type = 'customer'; subjectData.recipient_company = custM[1].trim() }
   }
 
-  const rawItems       = parseLineItems(emailHtml)
+  const debugCollector = debug ? { priceStrategies: [], pass2: [] } : null
+  const rawItems       = parseLineItems(emailHtml, debugCollector)
   const rawSkuItems    = rawItems.filter(i => i.type !== 'manual')
   const rawManualItems = rawItems.filter(i => i.type === 'manual')
   const delivery       = parseDelivery(emailHtml)
@@ -626,16 +675,23 @@ export default async function handler(req, res) {
       main_product,
       line_items,
       raw: {
-        sku_regex_hits: skuRegexHits,
-        sku_items:     rawSkuItems.map(i => ({
+        sku_regex_hits:   skuRegexHits,
+        // price_strategies: per-SKU record of which strategy fired, what it saw,
+        //   and why Strategy 1 (class-based) matched or didn't.
+        price_strategies: debugCollector.priceStrategies,
+        // pass2_hits: every PRICE_RE match in Pass 2, with skip reason or name.
+        //   "in_claimed_range" hits reveal whether manual items fall inside a
+        //   SKU item's context window (most common cause of missing manual lines).
+        pass2_hits:       debugCollector.pass2,
+        sku_items:        rawSkuItems.map(i => ({
           sku: i.sku, name: i.name, quantity: i.quantity, net_price: i.net_price,
         })),
-        manual_items:  rawManualItems,
+        manual_items:     rawManualItems,
         discounts,
         delivery,
-        subject:       subjectData,
+        subject:          subjectData,
         address,
-        email_preview: stripTags(emailHtml).slice(0, 2000),
+        email_preview:    stripTags(emailHtml).slice(0, 2000),
       },
     })
   }
