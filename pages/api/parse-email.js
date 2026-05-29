@@ -169,6 +169,8 @@ function parseLineItems(html, debugCollector = null) {
   // cell (sibling <td> after), regardless of nesting depth.
   const skuHits       = [...html.matchAll(SKU_RE_G)]
   const claimedRanges = []  // HTML char ranges "owned" by SKU items (used in Pass 2)
+  // Raw hit positions used in Pass 2 to detect bundle sub-items
+  const skuIndices    = skuHits.map(h => h.index)
 
   for (const hit of skuHits) {
     const sku = hit[1].toUpperCase()
@@ -340,6 +342,19 @@ function parseLineItems(html, debugCollector = null) {
 
     const name    = nameCands[nameCands.length - 1].slice(0, 200)
     const nameKey = name.toLowerCase()
+
+    // Skip Shopify bundle sub-items: child rows that appear under a main SKU row
+    // in the email. They have a Shopify "× N" quantity suffix in their name and
+    // sit within 2000 HTML chars of a known SKU hit.
+    // Examples: "IA900 Basis-pakke × 1", "Autel Rideheight targets × 1"
+    const isBundleSubItem =
+      /[×xX]\s*\d+\s*$/.test(name) &&
+      skuIndices.some(idx => pm.index > idx && pm.index < idx + 2000)
+    if (isBundleSubItem) {
+      if (debugCollector) debugCollector.pass2.push({ price, pos: pm.index, skip: 'bundle_sub_item', name })
+      continue
+    }
+
     if (seenManualNames.has(nameKey)) {
       if (debugCollector) debugCollector.pass2.push({ price, pos: pm.index, skip: 'duplicate_name', name })
       continue
@@ -766,3 +781,6 @@ export default async function handler(req, res) {
     parsed:               parsedSummary,
   })
 }
+
+// Named exports used by /api/test-parse
+export { parseLineItems, parseDelivery, parseAddress, parseSubject, parseDiscounts, stripTags, parsePrice }
