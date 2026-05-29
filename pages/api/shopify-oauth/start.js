@@ -21,7 +21,7 @@
 import { randomBytes } from 'crypto'
 
 const SHOP        = 'cepelotools.myshopify.com'
-const CLIENT_ID   = '8ec3e5d9c680dcd2a58837f4dac6e1f8'  // Partner App client ID (not secret)
+const CLIENT_ID   = '3233329f094b6f73715e5447b32ca3f2'  // Partner App client ID (not secret)
 const SCOPES      = 'read_draft_orders'
 
 export default function handler(req, res) {

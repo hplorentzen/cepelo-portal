@@ -12,7 +12,7 @@
 
 import { createHmac } from 'crypto'
 
-const CLIENT_ID = '8ec3e5d9c680dcd2a58837f4dac6e1f8'
+const CLIENT_ID = '3233329f094b6f73715e5447b32ca3f2'
 
 /** Validate Shopify's HMAC signature on the callback query string. */
 function isValidHmac(query, clientSecret) {
