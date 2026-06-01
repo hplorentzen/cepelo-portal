@@ -30,7 +30,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes }  from 'crypto'
-import { fetchProductBySku, fetchDraftOrderByRef, fetchProductRecommendations } from '../../lib/shopify'
+import { fetchProductBySku, fetchDraftOrderByRef, fetchAccessoriesFromMetafields } from '../../lib/shopify'
 import { sendEmail, sellerNotificationEmail } from '../../lib/email'
 import { getSellerByEmail } from '../../lib/sellers'
 
@@ -683,19 +683,14 @@ export default async function handler(req, res) {
 
   if (mainProductGid) {
     try {
-      const recs = await fetchProductRecommendations(mainProductGid)
+      const recs = await fetchAccessoriesFromMetafields(mainProductGid)
       available_accessories = recs.filter(r => r.sku && !quotedSkus.has(r.sku))
-      console.log(`[parse-email] Shopify recommendations: ${recs.length} raw → ${available_accessories.length} after dedup. GID=${mainProductGid}`)
-      if (available_accessories.length === 0) {
-        console.log('[parse-email] No recommendations returned by Shopify — accessories section will be empty')
-      }
+      console.log(`[parse-email] Metafield accessories: ${recs.length} raw → ${available_accessories.length} after dedup. GID=${mainProductGid}`)
     } catch (e) {
-      console.warn('[parse-email] fetchProductRecommendations failed — accessories will be empty:', e.message)
-      // No fallback to fake/static accessories per product spec
+      console.warn('[parse-email] fetchAccessoriesFromMetafields failed — accessories will be empty:', e.message)
     }
   } else {
     console.log('[parse-email] No shopify_product_id on main product — accessories will be empty')
-    // No fallback to fake/static accessories per product spec
   }
 
   // ── 6. Parsed summary ─────────────────────────────────────────────────────
