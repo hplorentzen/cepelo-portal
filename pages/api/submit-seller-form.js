@@ -114,12 +114,15 @@ export default async function handler(req, res) {
   const emailUrl = type === 'customer' ? customerUrl : quoteUrl
 
   try {
+    // Log sender fields for debugging (values are safe — no secrets)
+    console.log(`[submit-seller-form] sender_name="${quote.sender_name}" sender_email="${quote.sender_email}" sender_phone="${quote.sender_phone}"`)
+
     const tpl = dealerQuoteEmail({
       dealerName:  dealer_name || quote.dealer_name || '',
       quoteRef:    quote.shopify_order_id,
       products:    allProducts,
       quoteUrl:    emailUrl,
-      senderName:  quote.sender_name  || 'CEPELO Salgsteam',
+      senderName:  quote.sender_name  || undefined,   // undefined → no fake fallback; email shown if present
       senderEmail: quote.sender_email || undefined,
       senderPhone: quote.sender_phone || undefined,
       notes:       s(notes) || undefined,

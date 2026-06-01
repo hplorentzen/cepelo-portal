@@ -509,8 +509,20 @@ export default async function handler(req, res) {
 
   // Parse "Name <email>" or bare "email" from the From header value
   const fromMatch  = seller_email.match(/^(.+?)\s*<([^>]+)>/)
-  const sellerName = fromMatch ? fromMatch[1].trim() : ''
+  let   sellerName = fromMatch ? fromMatch[1].trim() : ''
   const sellerAddr = fromMatch ? fromMatch[2].trim() : seller_email.trim()
+
+  // If Power Automate sends a bare email address (no display name),
+  // derive a readable name from the local part: "lars.nielsen@cepelo.dk" → "Lars Nielsen"
+  if (!sellerName && sellerAddr.includes('@')) {
+    sellerName = sellerAddr
+      .split('@')[0]
+      .replace(/[._+\-]+/g, ' ')
+      .split(' ')
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ')
+  }
 
   // ── 1. Parse subject → extract quote_ref, type, recipient ─────────────────
   const subjectData = parseSubject(subject)
