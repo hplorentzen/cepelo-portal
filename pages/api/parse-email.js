@@ -662,11 +662,16 @@ export default async function handler(req, res) {
   }
 
   // ── 3. Shopify Storefront enrichment (images, descriptions, gross_price) ──
+  // isCustomerQuote must be known here so fetchProductBySku can skip the
+  // vejl_udsalgspris metafield override (which would clobber the discount-
+  // adjusted gross_price we already computed in buildItemsFromDraftOrder).
+  const isCustomerQuote = subjectData.type === 'customer'
+
   const enriched = await Promise.all(
     skuItems.map(async item => {
       let shopify = null
       try {
-        shopify = await fetchProductBySku(item.sku)
+        shopify = await fetchProductBySku(item.sku, isCustomerQuote)
         if (!shopify) console.warn(`[parse-email] SKU ${item.sku} not found in Shopify Storefront`)
       } catch (e) {
         console.warn(`[parse-email] Storefront error for ${item.sku}:`, e.message)
@@ -677,7 +682,6 @@ export default async function handler(req, res) {
 
   // ── 4. Build main_product + line_items ───────────────────────────────────
   const [first, ...rest] = enriched
-  const isCustomerQuote  = subjectData.type === 'customer'
 
   // For customer quotes the discount is already reflected in item.shopify_price
   // (Shopify stores the final custom/agreed price in item.price directly).
