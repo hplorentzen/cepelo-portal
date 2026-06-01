@@ -437,7 +437,7 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
             <div className="submit-area">
               {error && <div className="error-msg">⚠ {error}</div>}
               <button type="submit" className="submit-btn" disabled={submitting}>
-                {submitting ? 'Sender…' : 'Send tilbud til forhandler →'}
+                {submitting ? 'Sender…' : quoteType === 'customer' ? 'Send tilbud til slutkunde →' : 'Send tilbud til forhandler →'}
               </button>
               <div className="submit-note">
                 {quoteType === 'dealer'

@@ -120,8 +120,13 @@ export default async function handler(req, res) {
       products:    allProducts,
       quoteUrl:    emailUrl,
       senderName:  quote.sender_name || 'CEPELO Salgsteam',
+      notes:       s(notes) || undefined,
     })
-    await sendEmail({ to: dealer_email, ...tpl })
+    await sendEmail({
+      to:      dealer_email,
+      ...tpl,
+      replyTo: quote.sender_email || undefined,
+    })
     console.log(`[submit-seller-form] Dealer email sent to ${dealer_email} for quote ${quote.shopify_order_id}`)
   } catch (emailErr) {
     // Non-fatal — quote is updated in DB even if email fails; log full error for Vercel logs

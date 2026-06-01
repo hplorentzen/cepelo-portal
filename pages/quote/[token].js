@@ -5,21 +5,36 @@ import { getT } from '../../lib/translations'
 import { formatPrice, addVat, calcVat, parsePrice } from '../../lib/format'
 import { calcLeasing } from '../../lib/leasing'
 
+// ── Dealer logo via Brandfetch CDN (issue #12) ───────────────────────────────
+// Skip generic consumer domains — only company domains get a logo lookup.
+const CONSUMER_DOMAINS = new Set(['gmail.com','hotmail.com','outlook.com','yahoo.com','icloud.com','live.com','me.com','msn.com'])
+
+function getDealerLogoUrl(email) {
+  if (!email) return null
+  const domain = email.split('@')[1]?.toLowerCase()
+  if (!domain || CONSUMER_DOMAINS.has(domain)) return null
+  return `https://cdn.brandfetch.io/${domain}/theme/light/logo`
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function QuotePage({ quote }) {
-  const lang = quote?.lang || 'da'
-  const tr = getT(lang)
+  const lang     = quote?.lang || 'da'
+  const tr       = getT(lang)
   const isDealer = quote?.type === 'dealer'
-  // Initialise editable price fields as formatted strings ("11.995 kr") so they
-  // display nicely.  parsePrice() in the totals calculation handles the formatted
-  // strings via the updated thousands-dot logic in lib/format.js.
+
+  // Initialise editable price fields as formatted strings so they display
+  // nicely. parsePrice() in the totals block handles the formatted string.
   const [mainGross, setMainGross] = useState(formatPrice(quote?.main_product?.gross_price || 0, lang))
   const [lineGross, setLineGross] = useState((quote?.line_items || []).map(i =>
     formatPrice((i.gross_price || 0) * (i.quantity || 1), lang)
   ))
   const [selectedAccessories, setSelectedAccessories] = useState([])
+  // Dealer editable note — local state only, used in mailto (issue #13)
+  const [dealerNote, setDealerNote] = useState('')
 
   useEffect(() => {
-    // Dealer view: match by token; Customer view: match by customer_token (dealer token is not exposed)
+    // Dealer view: match by token; Customer view: match by customer_token
     const col = quote?.token ? 'token' : 'customer_token'
     const key = quote?.token || quote?.customer_token
     if (!key) return
@@ -27,20 +42,33 @@ export default function QuotePage({ quote }) {
   }, [quote?.token, quote?.customer_token])
 
   if (!quote) return (
-    <div style={{ fontFamily: 'Barlow, sans-serif', padding: 40, textAlign: 'center', color: '#333' }}>
+    <div style={{ fontFamily: 'sans-serif', padding: 40, textAlign: 'center', color: '#333' }}>
       <p>Tilbud ikke fundet eller udløbet.</p>
     </div>
   )
 
-  const accessories    = quote.available_accessories || []
-  // Product line items: regular products from the order (no type or type='product')
-  // Manual lines (type='manual') are rendered separately below
-  const productLineItems = (quote.line_items || []).filter(i => !['accessory','software','subscription','manual'].includes(i.type))
+  const accessories     = quote.available_accessories || []
+  // Product line items: regular products (no typed sub-items, no manual lines)
+  const productLineItems = (quote.line_items || []).filter(i =>
+    !['accessory', 'software', 'subscription', 'manual'].includes(i.type)
+  )
   const manualLineItems  = (quote.line_items || []).filter(i => i.type === 'manual')
   // Typed sub-items shown inside the main product block
-  const hardware      = (quote.line_items || []).filter(i => i.type === 'accessory')
-  const software      = (quote.line_items || []).filter(i => i.type === 'software')
-  const subscriptions = (quote.line_items || []).filter(i => i.type === 'subscription')
+  const hardware         = (quote.line_items || []).filter(i => i.type === 'accessory')
+  const software         = (quote.line_items || []).filter(i => i.type === 'software')
+  const subscriptions    = (quote.line_items || []).filter(i => i.type === 'subscription')
+
+  // Combined product list, sorted by gross_price descending (issue #9)
+  const allProductItems = [
+    ...(quote.main_product
+      ? [{ ...quote.main_product, _isMain: true,  _liIdx: -1 }]
+      : []),
+    ...productLineItems.map(item => ({
+      ...item,
+      _isMain: false,
+      _liIdx:  (quote.line_items || []).indexOf(item),
+    })),
+  ].sort((a, b) => (b.gross_price || 0) - (a.gross_price || 0))
 
   // Truncate description to first 2 sentences
   function shortDesc(text) {
@@ -54,23 +82,49 @@ export default function QuotePage({ quote }) {
     return text.length > 250 ? text.slice(0, 250) + '…' : text
   }
 
-  const selectedTotal = selectedAccessories.reduce((sum, acc) => sum + (parsePrice(acc.gross_price) || 0), 0)
-  const totalGrossOneTime = parsePrice(mainGross) +
-    lineGross.filter((_, idx) => (quote.line_items || [])[idx]?.type !== 'subscription').reduce((a, v) => a + parsePrice(v), 0) +
+  const selectedTotal       = selectedAccessories.reduce((sum, acc) => sum + (parsePrice(acc.gross_price) || 0), 0)
+  const totalGrossOneTime   = parsePrice(mainGross) +
+    lineGross.filter((_, idx) => (quote.line_items || [])[idx]?.type !== 'subscription')
+             .reduce((a, v) => a + parsePrice(v), 0) +
     selectedTotal
 
   const leasing = calcLeasing(totalGrossOneTime)
-  const dateStr = (iso) => { if (!iso) return ''; return new Date(iso).toLocaleDateString(lang === 'is' ? 'is-IS' : lang === 'no' ? 'nb-NO' : 'da-DK', { day: 'numeric', month: 'long', year: 'numeric' }) }
+
+  const dateStr = (iso) => {
+    if (!iso) return ''
+    return new Date(iso).toLocaleDateString(
+      lang === 'is' ? 'is-IS' : lang === 'no' ? 'nb-NO' : 'da-DK',
+      { day: 'numeric', month: 'long', year: 'numeric' }
+    )
+  }
 
   const toggleAccessory = (acc) => {
-    setSelectedAccessories(prev => prev.find(a => a.sku === acc.sku) ? prev.filter(a => a.sku !== acc.sku) : [...prev, acc])
+    setSelectedAccessories(prev =>
+      prev.find(a => a.sku === acc.sku) ? prev.filter(a => a.sku !== acc.sku) : [...prev, acc]
+    )
   }
 
   const handleAccept = async () => {
-    // Customer always accesses via customer_token; match by that column
-    await supabase.from('quotes').update({ accepted_at: new Date().toISOString(), status: 'accepted' }).eq('customer_token', quote.customer_token)
-    alert(lang === 'no' ? 'Tilbudet er akseptert!' : lang === 'is' ? 'Tilboðið hefur verið samþykkt!' : 'Tilbuddet er accepteret!')
+    await supabase.from('quotes')
+      .update({ accepted_at: new Date().toISOString(), status: 'accepted' })
+      .eq('customer_token', quote.customer_token)
+    alert(
+      lang === 'no' ? 'Tilbudet er akseptert!' :
+      lang === 'is' ? 'Tilboðið hefur verið samþykkt!' :
+      'Tilbuddet er accepteret!'
+    )
   }
+
+  // Is this an Autodiagnose quote? Used for software update section (issue #11)
+  const isAutodiagnose = quote.category === 'Autodiagnose' ||
+    (quote.main_product?.product_type || '').toLowerCase().includes('diagnos')
+
+  // Dealer logo URL (issue #12)
+  const dealerLogoUrl = isDealer ? getDealerLogoUrl(quote.dealer_email) : null
+
+  // Shopify ref for display (hide placeholder value 'PARSED')
+  const shopifyRef = quote.shopify_order_id && quote.shopify_order_id !== 'PARSED'
+    ? quote.shopify_order_id : null
 
   return (
     <>
@@ -94,28 +148,40 @@ export default function QuotePage({ quote }) {
         .quote-meta{text-align:right}
         .quote-label{font-family:'Montserrat',sans-serif;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-muted);font-weight:600;margin-bottom:6px}
         .quote-number{font-family:'Montserrat',sans-serif;font-size:22px;font-weight:800;color:var(--navy)}
+        .quote-shopify-ref{font-size:12px;color:var(--ink-muted);margin-top:3px}
         .quote-date{font-size:13px;color:var(--ink-muted);margin-top:4px}
         .valid-until{font-family:'Montserrat',sans-serif;font-size:12px;color:var(--blue);margin-top:3px;font-weight:600}
-        .parties{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:40px}
+        .parties{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:28px}
         .party-card{background:var(--white);border:1px solid var(--border);border-radius:10px;padding:20px 24px}
         .party-role{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:10px}
+        .party-logo{height:28px;max-width:120px;object-fit:contain;display:block;margin-bottom:8px}
         .party-name{font-family:'Montserrat',sans-serif;font-size:17px;font-weight:700;color:var(--navy);margin-bottom:6px}
         .party-details{font-size:13px;color:var(--ink-light);line-height:1.7}
         .section-title{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--border)}
-        .product-block{background:var(--white);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:20px}
+        .notes-block{margin-bottom:28px;padding:20px 24px;background:var(--card-bg);border:1px solid var(--border);border-radius:10px}
+        .notes-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:8px}
+        .notes-block p{font-size:13px;color:var(--ink-light);line-height:1.7;white-space:pre-wrap}
+        .dealer-note-input{width:100%;border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-size:13px;color:var(--ink-light);font-family:inherit;resize:vertical;background:var(--white);outline:none;line-height:1.6;display:block;margin-bottom:28px}
+        .dealer-note-input:focus{border-color:var(--blue)}
+        .product-block{background:var(--white);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:12px}
+        .product-block:last-of-type{margin-bottom:20px}
         .product-main{display:grid;grid-template-columns:100px 1fr auto;align-items:stretch}
         .product-img{background:var(--card-bg);display:flex;align-items:center;justify-content:center;font-size:36px;min-height:110px}
         .product-info{padding:20px 24px;border-left:1px solid var(--border)}
         .product-cat{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);font-weight:600;margin-bottom:5px}
         .product-name{font-family:'Montserrat',sans-serif;font-size:18px;font-weight:700;color:var(--navy);margin-bottom:6px;line-height:1.3}
         .product-desc{font-size:13px;color:var(--ink-light);line-height:1.6;max-width:460px}
+        .product-video{display:inline-flex;align-items:center;gap:4px;color:var(--blue);text-decoration:none;font-size:12px;font-weight:600;font-family:'Montserrat',sans-serif;margin-top:8px}
+        .product-video:hover{text-decoration:underline}
         .price-col{padding:20px 24px;text-align:right;border-left:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;min-width:160px}
         .price-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);font-weight:600;margin-bottom:4px}
         .price-value{font-family:'Montserrat',sans-serif;font-size:22px;font-weight:800;color:var(--navy)}
+        .price-value.sm{font-size:18px}
         .price-unit{font-size:12px;color:var(--ink-muted);margin-top:2px}
         .netto-block{margin-bottom:12px;padding-bottom:12px;border-bottom:1px dashed var(--border)}
         .netto-block .price-value{color:var(--navy);font-size:18px}
         .edit-input{font-family:'Montserrat',sans-serif;font-size:20px;font-weight:800;color:var(--navy);border:none;border-bottom:2px solid var(--orange);background:transparent;text-align:right;width:120px;outline:none;padding:2px 0}
+        .edit-input.sm{font-size:18px;width:100px}
         .edit-hint{font-family:'Montserrat',sans-serif;font-size:10px;color:var(--orange);font-weight:600;margin-top:3px;letter-spacing:.05em}
         .sub-items{border-top:1px solid var(--border)}
         .sub-section-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);padding:12px 24px 8px;background:var(--paper)}
@@ -129,6 +195,11 @@ export default function QuotePage({ quote }) {
         .sub-badge{font-family:'Montserrat',sans-serif;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;letter-spacing:.05em}
         .sub-badge.monthly{background:var(--green-bg);color:var(--green)}
         .sub-badge.yearly{background:var(--orange-bg);color:var(--orange)}
+        .software-update-block{margin-bottom:20px}
+        .software-update-banner{padding:14px 24px;background:var(--orange-bg);display:flex;align-items:center;gap:12px}
+        .software-update-icon{font-size:20px;flex-shrink:0}
+        .software-update-title{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:700;color:var(--orange);letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px}
+        .software-update-sub{font-size:12px;color:var(--ink-light)}
         .acc-section{margin-top:20px;margin-bottom:20px}
         .acc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:12px}
         .acc-card{background:var(--white);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s;display:flex;align-items:flex-start;gap:10px}
@@ -153,17 +224,14 @@ export default function QuotePage({ quote }) {
         .dealer-tools{margin-top:28px;background:var(--blue-light);border:1px solid #c0d8ee;border-radius:12px;padding:24px 28px}
         .dealer-tools h3{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--navy);margin-bottom:6px}
         .dealer-tools p{font-size:13px;color:var(--ink-light);margin-bottom:18px}
-        .tools-row{display:flex;gap:12px;flex-wrap:wrap}
-        .btn{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:10px 22px;border-radius:27px;border:none;cursor:pointer;transition:all .15s}
+        .tools-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+        .btn{font-family:'Montserrat',sans-serif;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:10px 22px;border-radius:27px;border:none;cursor:pointer;transition:all .15s;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
         .btn-primary{background:var(--blue);color:white} .btn-primary:hover{background:var(--navy)}
         .btn-secondary{background:white;color:var(--blue);border:1px solid #c0d8ee} .btn-secondary:hover{background:var(--paper)}
         .customer-action{margin-top:28px;text-align:center;padding:32px;background:var(--white);border:1px solid var(--border);border-radius:12px}
         .customer-action p{font-size:14px;color:var(--ink-light);margin-bottom:16px}
         .accept-btn{font-family:'Montserrat',sans-serif;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:14px 40px;background:var(--blue);color:white;border:none;border-radius:27px;cursor:pointer;transition:background .15s}
         .accept-btn:hover{background:var(--navy)}
-        .notes-block{margin-top:28px;padding:20px 24px;background:var(--card-bg);border:1px solid var(--border);border-radius:10px}
-        .notes-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:8px}
-        .notes-block p{font-size:13px;color:var(--ink-light);line-height:1.7}
         .quote-footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
         .footer-brand{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:600;color:var(--ink-muted)} .footer-brand strong{color:var(--navy)}
         .footer-contact{font-size:11px;color:var(--ink-muted);text-align:right}
@@ -172,39 +240,57 @@ export default function QuotePage({ quote }) {
       `}</style>
 
       <div className="page">
+
+        {/* ── View badge ─────────────────────────────────────────────────────── */}
         <div className={`view-badge ${isDealer ? 'dealer' : 'customer'}`}>
           <span className="dot" />
           {isDealer ? tr.dealerPortalLabel : tr.customerPortalLabel}
         </div>
 
+        {/* ── Quote header ───────────────────────────────────────────────────── */}
         <div className="quote-header">
           <div>
             <img src="/cepelo-logo.png" alt="CEPELO" style={{height:40,display:'block',marginBottom:6}} />
             <div className="tagline">{tr.tagline}</div>
-            {isDealer && quote.dealer_name && <div className="header-dealer">
-              <strong>{quote.dealer_name}</strong>
-              {quote.dealer_email && <> · {quote.dealer_email}</>}
-              {quote.dealer_phone && <> · {quote.dealer_phone}</>}
-            </div>}
+            {isDealer && quote.dealer_name && (
+              <div className="header-dealer">
+                <strong>{quote.dealer_name}</strong>
+                {quote.dealer_email && <> · {quote.dealer_email}</>}
+                {quote.dealer_phone && <> · {quote.dealer_phone}</>}
+              </div>
+            )}
           </div>
           <div className="quote-meta">
             <div className="quote-label">{tr.quote}</div>
             <div className="quote-number">#{(quote.token || quote.customer_token)?.slice(-6).toUpperCase()}</div>
+            {/* Shopify order reference (issue #5) */}
+            {shopifyRef && <div className="quote-shopify-ref">Shopify {shopifyRef}</div>}
             <div className="quote-date">{dateStr(new Date().toISOString())}</div>
             {quote.valid_until && <div className="valid-until">{tr.validUntil} {dateStr(quote.valid_until)}</div>}
           </div>
         </div>
 
-        {/* Customer view: only "Slutkunde" card (no dealer card — dealer is CEPELO's internal relation) */}
+        {/* ── Parties ────────────────────────────────────────────────────────── */}
         <div className="parties" style={!isDealer ? {gridTemplateColumns:'1fr',maxWidth:400} : {}}>
-          {isDealer && <div className="party-card">
-            <div className="party-role">Forhandler</div>
-            <div className="party-name">{quote.dealer_name || '—'}</div>
-            <div className="party-details">
-              {quote.dealer_email && <>{quote.dealer_email}<br /></>}
-              {quote.dealer_phone && <>{quote.dealer_phone}</>}
+          {isDealer && (
+            <div className="party-card">
+              <div className="party-role">Forhandler</div>
+              {/* Dealer logo (issue #12) */}
+              {dealerLogoUrl && (
+                <img
+                  className="party-logo"
+                  src={dealerLogoUrl}
+                  alt={quote.dealer_name}
+                  onError={e => { e.target.style.display = 'none' }}
+                />
+              )}
+              <div className="party-name">{quote.dealer_name || '—'}</div>
+              <div className="party-details">
+                {quote.dealer_email && <>{quote.dealer_email}<br /></>}
+                {quote.dealer_phone && <>{quote.dealer_phone}</>}
+              </div>
             </div>
-          </div>}
+          )}
           <div className="party-card">
             <div className="party-role">Slutkunde</div>
             <div className="party-name">{quote.recipient_company || quote.recipient_name || '—'}</div>
@@ -216,126 +302,311 @@ export default function QuotePage({ quote }) {
           </div>
         </div>
 
-        {quote.main_product && <>
-          <div className="section-title">{tr.mainProduct}</div>
-          <div className="product-block">
-            <div className="product-main">
-              <div className="product-img">{quote.main_product.image_url ? <img src={quote.main_product.image_url} style={{width:'100%',height:'100%',objectFit:'cover'}} /> : '⚙️'}</div>
-              <div className="product-info">
-                <div className="product-cat">{quote.main_product.product_type || quote.category}</div>
-                <div className="product-name">{quote.main_product.name}</div>
-                <div className="product-desc">
-                  {shortDesc(quote.main_product.description)}
-                  {quote.main_product.shopify_handle && <>{' '}<a href={`https://cepelo.dk/products/${quote.main_product.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>}
-                </div>
-              </div>
-              <div className="price-col">
-                {isDealer ? <>
-                  <div className="netto-block">
-                    <div className="price-label">{tr.netPrice}</div>
-                    <div className="price-value">{formatPrice(quote.main_product.net_price, lang)}</div>
-                    <div className="price-unit">{tr.exclVat}</div>
-                  </div>
-                  <div>
-                    <div className="price-label">{tr.grossPrice}</div>
-                    <input className="edit-input" value={mainGross} onChange={e => setMainGross(e.target.value)} />
-                    <div className="edit-hint">{tr.editable}</div>
-                  </div>
-                </> : <>
-                  <div className="price-label">{tr.quote}</div>
-                  <div className="price-value">{formatPrice(quote.main_product.gross_price, lang)}</div>
-                  <div className="price-unit">{tr.exclVat}</div>
-                </>}
-              </div>
-            </div>
-
-            {(hardware.length > 0 || software.length > 0 || subscriptions.length > 0) && <div className="sub-items">
-              {hardware.length > 0 && <><div className="sub-section-label">{tr.accessories}</div>{hardware.map((item, idx) => <div className="sub-item" key={idx}><div><div className="item-name">{item.name}</div>{item.description && <div className="item-desc">{item.description}</div>}</div><div className="item-qty">{item.qty || 1} stk.</div>{isDealer ? <div className="item-price-stack"><div className="netto-small">Netto: {formatPrice(item.net_price, lang)}</div><input className="line-edit" value={lineGross[idx] || ''} onChange={e => { const n=[...lineGross]; n[idx]=e.target.value; setLineGross(n) }} /></div> : <div className="item-price">{formatPrice(item.gross_price, lang)}</div>}</div>)}</>}
-              {software.length > 0 && <><div className="sub-section-label">{tr.software}</div>{software.map((item, idx) => <div className="sub-item" key={idx}><div><div className="item-name">{item.name}</div></div><div className="item-qty">1 lic.</div>{isDealer ? <div className="item-price-stack"><div className="netto-small">Netto: {formatPrice(item.net_price, lang)}</div><input className="line-edit" value={lineGross[hardware.length+idx] || ''} onChange={e => { const n=[...lineGross]; n[hardware.length+idx]=e.target.value; setLineGross(n) }} /></div> : <div className="item-price">{formatPrice(item.gross_price, lang)}</div>}</div>)}</>}
-              {subscriptions.length > 0 && <><div className="sub-section-label">{tr.subscriptions}</div>{subscriptions.map((item, idx) => <div className="sub-item" key={idx}><div><div className="item-name">{item.name}</div>{item.description && <div className="item-desc">{item.description}</div>}</div><div className="item-qty"><span className={`sub-badge ${item.badge || 'monthly'}`}>{item.badge === 'yearly' ? tr.yearly : tr.monthly}</span></div><div className="item-price">{formatPrice(item.gross_price, lang)}{item.badge === 'yearly' ? tr.perYear : tr.perMonth}</div></div>)}</>}
-            </div>}
+        {/* ── Seller note — moved to TOP (issue #3) ──────────────────────────── */}
+        {quote.notes && (
+          <div className="notes-block">
+            <div className="notes-label">{tr.sellerNote}</div>
+            <p>{quote.notes}</p>
           </div>
-        {productLineItems.length > 0 && <>
-          <div className="section-title" style={{marginTop:24}}>{tr.lineItems || 'Øvrige produkter'}</div>
-          {productLineItems.map((item, idx) => {
-            const liIdx = (quote.line_items || []).indexOf(item)
-            return <div className="product-block" key={idx} style={{marginBottom:12}}>
+        )}
+
+        {/* ── Dealer editable note textarea (issue #13, local state only) ───── */}
+        {isDealer && (
+          <div className="no-print">
+            <textarea
+              className="dealer-note-input"
+              value={dealerNote}
+              onChange={e => setDealerNote(e.target.value)}
+              placeholder={
+                lang === 'no' ? 'Legg til en personlig melding til kunden før du videresender tilbudet…' :
+                lang === 'is' ? 'Bættu við persónulegri skilaboð til viðskiptavinar…' :
+                'Tilføj en personlig besked til kunden inden du videresender tilbuddet…'
+              }
+              rows={3}
+            />
+          </div>
+        )}
+
+        {/* ── Combined product list sorted by price desc (issue #9) ─────────── */}
+        {allProductItems.map((item, idx) => {
+          const liIdx = item._liIdx
+          // State helpers for editable gross price (issue #6 — onBlur formatting)
+          const grossState = item._isMain
+            ? mainGross
+            : (lineGross[liIdx] ?? formatPrice((item.gross_price || 0) * (item.quantity || 1), lang))
+
+          const handleGrossChange = item._isMain
+            ? (val) => setMainGross(val)
+            : (val) => { const n = [...lineGross]; n[liIdx] = val; setLineGross(n) }
+
+          const handleGrossBlur = item._isMain
+            ? (e) => setMainGross(formatPrice(parsePrice(e.target.value), lang))
+            : (e) => { const n = [...lineGross]; n[liIdx] = formatPrice(parsePrice(e.target.value), lang); setLineGross(n) }
+
+          const netPrice    = item._isMain ? quote.main_product?.net_price : item.net_price
+          const showSubItems = item._isMain && (hardware.length > 0 || software.length > 0 || subscriptions.length > 0)
+
+          return (
+            <div className="product-block" key={idx}>
               <div className="product-main">
-                <div className="product-img" style={{minHeight:80}}>
+                {/* Thumbnail */}
+                <div className="product-img">
                   {item.image_url
-                    ? <img src={item.image_url} style={{width:'100%',height:'100%',objectFit:'cover'}} />
-                    : '📦'}
+                    ? <img src={item.image_url} style={{width:'100%',height:'100%',objectFit:'cover'}} alt={item.name} />
+                    : <span style={{fontSize:32}}>{item._isMain ? '⚙️' : '📦'}</span>
+                  }
                 </div>
+
+                {/* Product info */}
                 <div className="product-info">
-                  <div className="product-cat">{item.product_type || item.sku}</div>
-                  <div className="product-name" style={{fontSize:17}}>{item.name}</div>
-                  {item.quantity > 1 && <div style={{fontSize:12,color:'var(--ink-muted)',marginTop:4}}>Antal: {item.quantity}</div>}
-                  {item.description && <div className="product-desc" style={{marginTop:6}}>
+                  <div className="product-cat">{item.product_type || (item._isMain ? quote.category : item.sku)}</div>
+                  <div className="product-name" style={item._isMain ? {} : {fontSize:17}}>{item.name}</div>
+                  <div className="product-desc">
                     {shortDesc(item.description)}
-                    {item.shopify_handle && <>{' '}<a href={`https://cepelo.dk/products/${item.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>}
-                  </div>}
+                    {item.shopify_handle && (
+                      <>{' '}<a href={`https://cepelo.dk/products/${item.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>
+                    )}
+                  </div>
+                  {/* Video link (issue #10) */}
+                  {item.video_url && (
+                    <a href={item.video_url} target="_blank" rel="noopener noreferrer" className="product-video">
+                      ▶ Se video →
+                    </a>
+                  )}
+                  {!item._isMain && item.quantity > 1 && (
+                    <div style={{fontSize:12,color:'var(--ink-muted)',marginTop:4}}>Antal: {item.quantity}</div>
+                  )}
                 </div>
+
+                {/* Price column */}
                 <div className="price-col">
-                  {isDealer ? <>
-                    <div className="netto-block">
-                      <div className="price-label">{tr.netPrice}</div>
-                      <div className="price-value" style={{fontSize:18,color:'var(--dealer-bg)'}}>{formatPrice(item.net_price, lang)}</div>
+                  {isDealer ? (
+                    <>
+                      <div className="netto-block">
+                        <div className="price-label">{tr.netPrice}</div>
+                        <div className={`price-value${item._isMain ? '' : ' sm'}`}>{formatPrice(netPrice, lang)}</div>
+                        <div className="price-unit">{tr.exclVat}</div>
+                      </div>
+                      <div>
+                        <div className="price-label">{tr.grossPrice}</div>
+                        {/* Editable gross with blur formatting (issue #6) */}
+                        <input
+                          className={`edit-input${item._isMain ? '' : ' sm'}`}
+                          value={grossState}
+                          onChange={e => handleGrossChange(e.target.value)}
+                          onBlur={handleGrossBlur}
+                        />
+                        <div className="edit-hint">{tr.editable}</div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="price-label">{tr.quote}</div>
+                      <div className={`price-value${item._isMain ? '' : ' sm'}`}>{formatPrice(item.gross_price || item.net_price, lang)}</div>
                       <div className="price-unit">{tr.exclVat}</div>
-                    </div>
-                    {(item.gross_price > 0) && <div>
-                      <div className="price-label">{tr.grossPrice}</div>
-                      <input className="line-edit" value={lineGross[liIdx] ?? item.gross_price} onChange={e => { const n=[...lineGross]; n[liIdx]=e.target.value; setLineGross(n) }} />
-                    </div>}
-                  </> : <>
-                    <div className="price-label">{tr.quote}</div>
-                    <div className="price-value">{formatPrice(item.gross_price || item.net_price, lang)}</div>
-                    <div className="price-unit">{tr.exclVat}</div>
-                  </>}
+                    </>
+                  )}
                 </div>
               </div>
+
+              {/* Sub-items: accessories, software, subscriptions — main product only */}
+              {showSubItems && (
+                <div className="sub-items">
+                  {hardware.length > 0 && (
+                    <>
+                      <div className="sub-section-label">{tr.accessories}</div>
+                      {hardware.map((hw, hIdx) => {
+                        const hwLiIdx = (quote.line_items || []).indexOf(hw)
+                        return (
+                          <div className="sub-item" key={hIdx}>
+                            <div>
+                              <div className="item-name">{hw.name}</div>
+                              {hw.description && <div className="item-desc">{hw.description}</div>}
+                            </div>
+                            <div className="item-qty">{hw.qty || 1} stk.</div>
+                            {isDealer
+                              ? <div className="item-price-stack">
+                                  <div className="netto-small">Netto: {formatPrice(hw.net_price, lang)}</div>
+                                  <input
+                                    className="line-edit"
+                                    value={lineGross[hwLiIdx] || ''}
+                                    onChange={e => { const n=[...lineGross]; n[hwLiIdx]=e.target.value; setLineGross(n) }}
+                                    onBlur={e => { const n=[...lineGross]; n[hwLiIdx]=formatPrice(parsePrice(e.target.value), lang); setLineGross(n) }}
+                                  />
+                                </div>
+                              : <div className="item-price">{formatPrice(hw.gross_price, lang)}</div>
+                            }
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
+                  {software.length > 0 && (
+                    <>
+                      <div className="sub-section-label">{tr.software}</div>
+                      {software.map((sw, sIdx) => {
+                        const swLiIdx = (quote.line_items || []).indexOf(sw)
+                        return (
+                          <div className="sub-item" key={sIdx}>
+                            <div><div className="item-name">{sw.name}</div></div>
+                            <div className="item-qty">1 lic.</div>
+                            {isDealer
+                              ? <div className="item-price-stack">
+                                  <div className="netto-small">Netto: {formatPrice(sw.net_price, lang)}</div>
+                                  <input
+                                    className="line-edit"
+                                    value={lineGross[swLiIdx] || ''}
+                                    onChange={e => { const n=[...lineGross]; n[swLiIdx]=e.target.value; setLineGross(n) }}
+                                    onBlur={e => { const n=[...lineGross]; n[swLiIdx]=formatPrice(parsePrice(e.target.value), lang); setLineGross(n) }}
+                                  />
+                                </div>
+                              : <div className="item-price">{formatPrice(sw.gross_price, lang)}</div>
+                            }
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
+                  {subscriptions.length > 0 && (
+                    <>
+                      <div className="sub-section-label">{tr.subscriptions}</div>
+                      {subscriptions.map((sub, subIdx) => (
+                        <div className="sub-item" key={subIdx}>
+                          <div>
+                            <div className="item-name">{sub.name}</div>
+                            {sub.description && <div className="item-desc">{sub.description}</div>}
+                          </div>
+                          <div className="item-qty">
+                            <span className={`sub-badge ${sub.badge || 'monthly'}`}>
+                              {sub.badge === 'yearly' ? tr.yearly : tr.monthly}
+                            </span>
+                          </div>
+                          <div className="item-price">
+                            {formatPrice(sub.gross_price, lang)}
+                            {sub.badge === 'yearly' ? tr.perYear : tr.perMonth}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
-          })}
-        </>}
-        {manualLineItems.length > 0 && <>
-          <div className="section-title" style={{marginTop:24}}>Øvrige poster</div>
-          <div className="product-block" style={{marginBottom:8}}>
-            {manualLineItems.map((item, idx) => (
-              <div key={idx} className="sub-item" style={{borderTop:idx===0?'none':undefined}}>
-                <div><div className="item-name" style={{fontSize:15}}>{item.name}</div></div>
-                <div className="item-qty">1 stk.</div>
-                <div className="item-price">{formatPrice(item.gross_price || item.net_price, lang)}</div>
+          )
+        })}
+
+        {/* ── Software update section — Autodiagnose only (issue #11) ────────── */}
+        {isAutodiagnose && (
+          <div className="software-update-block">
+            <div className="section-title" style={{marginTop:8}}>
+              {lang === 'no' ? 'Programvareoppdateringer' : lang === 'is' ? 'Hugbúnaðaruppfærslur' : 'Softwareopdateringer'}
+            </div>
+            <div className="product-block" style={{marginBottom:20}}>
+              <div className="software-update-banner">
+                <span className="software-update-icon">🔄</span>
+                <div>
+                  <div className="software-update-title">
+                    {lang === 'no' ? 'Programvare holdes oppdatert' : lang === 'is' ? 'Hugbúnaður uppfærður reglulega' : 'Software holdes opdateret'}
+                  </div>
+                  <div className="software-update-sub">
+                    {lang === 'no'
+                      ? 'Ny diagnosedatabase · Nye bilmodeller · Forbedrede funksjoner'
+                      : lang === 'is'
+                      ? 'Ný greiningargagnagrunnur · Nýjar bílategundir · Bætt virkni'
+                      : 'Opdateret diagnosedatabase · Nye bilmodeller · Forbedrede funktioner'}
+                  </div>
+                </div>
               </div>
-            ))}
+              {subscriptions.map((sub, subIdx) => {
+                const subName = typeof sub.name === 'object' ? (sub.name[lang] || sub.name.da) : sub.name
+                const subDesc = typeof sub.description === 'object' ? (sub.description[lang] || sub.description.da) : sub.description
+                return (
+                  <div className="sub-item" key={subIdx} style={{borderTop:'1px solid var(--border)'}}>
+                    <div>
+                      <div className="item-name">{subName}</div>
+                      {subDesc && <div className="item-desc">{subDesc}</div>}
+                    </div>
+                    <span className={`sub-badge ${sub.badge || 'yearly'}`}>
+                      {sub.badge === 'yearly' ? tr.yearly : tr.monthly}
+                    </span>
+                    <div className="item-price">
+                      {formatPrice(sub.gross_price, lang)}
+                      {sub.badge === 'yearly' ? tr.perYear : tr.perMonth}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        </>}
-        </>}
+        )}
 
-        {accessories.length > 0 && <div className="acc-section no-print">
-          <div className="section-title">{tr.accessories}</div>
-          <div className="acc-grid">
-            {accessories.map((acc, idx) => {
-              const selected = !!selectedAccessories.find(a => a.sku === acc.sku)
-              const name = typeof acc.name === 'object' ? (acc.name[lang] || acc.name.da) : acc.name
-              return <div key={idx} className={`acc-card ${selected ? 'selected' : ''}`} onClick={() => toggleAccessory(acc)}>
-                <div className="acc-check">{selected && '✓'}</div>
-                <div><div className="acc-name">{name}</div><div className="acc-price">{formatPrice(acc.gross_price, lang)}{acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}</div></div>
-              </div>
-            })}
+        {/* ── Manual line items (fragt, montering etc.) ──────────────────────── */}
+        {manualLineItems.length > 0 && (
+          <>
+            <div className="section-title" style={{marginTop:24}}>Øvrige poster</div>
+            <div className="product-block" style={{marginBottom:8}}>
+              {manualLineItems.map((item, idx) => (
+                <div key={idx} className="sub-item" style={{borderTop:idx===0?'none':undefined}}>
+                  <div><div className="item-name" style={{fontSize:15}}>{item.name}</div></div>
+                  <div className="item-qty">1 stk.</div>
+                  <div className="item-price">{formatPrice(item.gross_price || item.net_price, lang)}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ── Accessories grid ───────────────────────────────────────────────── */}
+        {accessories.length > 0 && (
+          <div className="acc-section no-print">
+            <div className="section-title">{tr.accessories}</div>
+            <div className="acc-grid">
+              {accessories.map((acc, idx) => {
+                const selected = !!selectedAccessories.find(a => a.sku === acc.sku)
+                const name = typeof acc.name === 'object' ? (acc.name[lang] || acc.name.da) : acc.name
+                return (
+                  <div key={idx} className={`acc-card ${selected ? 'selected' : ''}`} onClick={() => toggleAccessory(acc)}>
+                    <div className="acc-check">{selected && '✓'}</div>
+                    <div>
+                      <div className="acc-name">{name}</div>
+                      <div className="acc-price">
+                        {formatPrice(acc.gross_price, lang)}
+                        {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        </div>}
+        )}
 
-        {totalGrossOneTime > 0 && <div className="leasing-block">
-          <div className="leasing-title">{tr.leasingTitle}</div>
-          <div className="leasing-amount">{formatPrice(leasing.monthlyPayment, lang)}<span style={{fontSize:16,color:'var(--ink-muted)'}}>{tr.perMonth}</span></div>
-          <div className="leasing-sub">{leasing.termMonths} {tr.leasingMonths} · {lang === 'da' ? 'Restværdi' : lang === 'no' ? 'Restverdi' : 'Leifvirði'}: {formatPrice(leasing.residualValue, lang)}</div>
-          <div className="leasing-disclaimer">{leasing.disclaimer[lang]}</div>
-        </div>}
+        {/* ── Leasing indicator ──────────────────────────────────────────────── */}
+        {totalGrossOneTime > 0 && (
+          <div className="leasing-block">
+            <div className="leasing-title">{tr.leasingTitle}</div>
+            <div className="leasing-amount">
+              {formatPrice(leasing.monthlyPayment, lang)}
+              <span style={{fontSize:16,color:'var(--ink-muted)'}}>{tr.perMonth}</span>
+            </div>
+            <div className="leasing-sub">
+              {leasing.termMonths} {tr.leasingMonths} · {lang === 'da' ? 'Restværdi' : lang === 'no' ? 'Restverdi' : 'Leifvirði'}: {formatPrice(leasing.residualValue, lang)}
+            </div>
+            <div className="leasing-disclaimer">{leasing.disclaimer[lang]}</div>
+          </div>
+        )}
 
+        {/* ── Totals ─────────────────────────────────────────────────────────── */}
         <div className={`totals-block ${isDealer ? 'dealer' : 'customer'}`}>
           <div className="totals-grid">
             <div className="t-label">{tr.subtotal}</div>
             <div className="t-value">{formatPrice(totalGrossOneTime, lang)}</div>
-            {!isDealer && <><div className="t-label">{tr.vat}</div><div className="t-value">{formatPrice(calcVat(totalGrossOneTime, lang), lang)}</div></>}
+            {!isDealer && (
+              <>
+                <div className="t-label">{tr.vat}</div>
+                <div className="t-value">{formatPrice(calcVat(totalGrossOneTime, lang), lang)}</div>
+              </>
+            )}
             <hr className="t-divider" />
             <div className="t-label main">{isDealer ? tr.total : tr.totalInclVat}</div>
             <div className="t-value main">{formatPrice(isDealer ? totalGrossOneTime : addVat(totalGrossOneTime, lang), lang)}</div>
@@ -343,33 +614,68 @@ export default function QuotePage({ quote }) {
           <div className="totals-note">{isDealer ? `${tr.allPricesExcl} · ${tr.netPricesNote}` : tr.paymentTerms}</div>
         </div>
 
-        {isDealer && <div className="dealer-tools no-print">
-          <h3>{tr.forwardTitle}</h3>
-          <p>{tr.forwardDesc}</p>
-          <div className="tools-row">
-            <button className="btn btn-primary" onClick={() => window.print()}>🖨 {tr.printCopy}</button>
-            <button className="btn btn-secondary" onClick={() => { navigator.clipboard.writeText(window.location.origin + '/quote/' + quote.customer_token); alert('Link kopieret!') }}>🔗 {tr.copyLink}</button>
+        {/* ── Dealer tools — redesigned (issue #7) ───────────────────────────── */}
+        {isDealer && (
+          <div className="dealer-tools no-print">
+            <h3>{tr.forwardTitle}</h3>
+            <p>{tr.forwardDesc}</p>
+            <div className="tools-row">
+              {/* Open quote again in new tab */}
+              <a className="btn btn-secondary" href={`/quote/${quote.token}`} target="_blank" rel="noopener noreferrer">
+                ↗ Åbn tilbud igen
+              </a>
+              {/* Send to customer via mailto (includes dealer's note from textarea) */}
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  const customerUrl = window.location.origin + '/quote/' + quote.customer_token
+                  const recipientName = quote.recipient_company || quote.recipient_name || ''
+                  const subject = encodeURIComponent(
+                    (lang === 'no' ? 'Tilbud fra CEPELO' : 'Tilbud fra CEPELO') +
+                    (shopifyRef ? ' – ' + shopifyRef : '')
+                  )
+                  const greeting = recipientName ? `Kære ${recipientName},\n\n` : ''
+                  const note = dealerNote ? dealerNote + '\n\n' : ''
+                  const body = encodeURIComponent(
+                    greeting +
+                    note +
+                    (lang === 'no' ? 'Se tilbudet fra CEPELO her:\n' : 'Se tilbuddet fra CEPELO her:\n') +
+                    customerUrl +
+                    '\n\n' + (lang === 'no' ? 'Med vennlig hilsen' : 'Med venlig hilsen') +
+                    '\n' + (quote.dealer_name || 'CEPELO Salgsteam')
+                  )
+                  const mailto = `mailto:${quote.recipient_email || ''}?subject=${subject}&body=${body}`
+                  window.open(mailto)
+                }}
+              >
+                ✉ Send til kunde
+              </button>
+            </div>
           </div>
-        </div>}
+        )}
 
-        {!isDealer && <div className="customer-action no-print">
-          <p>{tr.contactText} <strong>{quote.sender_name || quote.dealer_name || 'CEPELO'}</strong> · {quote.sender_email}</p>
-          <button className="accept-btn" onClick={handleAccept}>✓ {tr.acceptQuote}</button>
-        </div>}
+        {/* ── Customer accept / contact ───────────────────────────────────────── */}
+        {!isDealer && (
+          <div className="customer-action no-print">
+            <p>{tr.contactText} <strong>{quote.sender_name || quote.dealer_name || 'CEPELO'}</strong> · {quote.sender_email}</p>
+            <button className="accept-btn" onClick={handleAccept}>✓ {tr.acceptQuote}</button>
+          </div>
+        )}
 
-        {quote.notes && <div className="notes-block">
-          <div className="notes-label">{tr.sellerNote}</div>
-          <p>{quote.notes}</p>
-        </div>}
-
+        {/* ── Footer ─────────────────────────────────────────────────────────── */}
         <div className="quote-footer">
           <div className="footer-brand"><strong>CEPELO A/S</strong> · Nibevej 54, 9200 Aalborg SV</div>
           <div className="footer-contact">+45 98 18 09 00 · info@cepelo.dk · cepelo.dk</div>
         </div>
+
       </div>
     </>
   )
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-side data fetching
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function getServerSideProps({ params }) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -386,7 +692,7 @@ export async function getServerSideProps({ params }) {
     .single()
 
   if (!dealerError && dealerQuote) {
-    // Dealer access — return full row including customer_token (dealer needs it to share the link)
+    // Dealer access — return full row including customer_token (needed to share the link)
     return { props: { quote: dealerQuote } }
   }
 
