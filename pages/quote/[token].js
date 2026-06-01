@@ -180,8 +180,14 @@ export default function QuotePage({ quote }) {
         .product-cat{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--blue);font-weight:600;margin-bottom:5px}
         .product-name{font-family:'Montserrat',sans-serif;font-size:18px;font-weight:700;color:var(--navy);margin-bottom:6px;line-height:1.3}
         .product-desc{font-size:13px;color:var(--ink-light);line-height:1.6;max-width:460px}
-        .product-video{display:inline-flex;align-items:center;gap:4px;color:var(--blue);text-decoration:none;font-size:12px;font-weight:600;font-family:'Montserrat',sans-serif;margin-top:8px}
-        .product-video:hover{text-decoration:underline}
+        .product-video{display:block;position:relative;width:100%;height:120px;border-radius:8px;overflow:hidden;margin-top:12px;cursor:pointer;text-decoration:none;flex-shrink:0}
+        .product-video-bg{position:absolute;inset:0;background-size:cover;background-position:center;background-color:var(--navy)}
+        .product-video-overlay{position:absolute;inset:0;background:rgba(10,22,40,.55);transition:background .2s}
+        .product-video:hover .product-video-overlay{background:rgba(10,22,40,.35)}
+        .product-video-play{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+        .product-video-circle{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.92);display:flex;align-items:center;justify-content:center;font-size:16px;padding-left:3px;transition:transform .2s}
+        .product-video:hover .product-video-circle{transform:scale(1.12)}
+        .product-video-label{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:700;color:#fff;letter-spacing:.07em;text-transform:uppercase}
         .price-col{padding:20px 24px;text-align:right;border-left:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;min-width:160px}
         .price-label{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-muted);font-weight:600;margin-bottom:4px}
         .price-value{font-family:'Montserrat',sans-serif;font-size:22px;font-weight:800;color:var(--navy)}
@@ -401,10 +407,15 @@ export default function QuotePage({ quote }) {
                       <>{' '}<a href={`https://cepelo.dk/products/${item.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>
                     )}
                   </div>
-                  {/* Video link (issue #10) */}
+                  {/* Video thumbnail card */}
                   {item.video_url && (
                     <a href={item.video_url} target="_blank" rel="noopener noreferrer" className="product-video">
-                      ▶ Se video →
+                      <div className="product-video-bg" style={item.image_url ? {backgroundImage:`url(${item.image_url})`} : {}} />
+                      <div className="product-video-overlay" />
+                      <div className="product-video-play">
+                        <div className="product-video-circle">▶</div>
+                        <span className="product-video-label">Se video</span>
+                      </div>
                     </a>
                   )}
                   {!item._isMain && item.quantity > 1 && (
