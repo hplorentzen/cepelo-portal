@@ -580,7 +580,11 @@ export default async function handler(req, res) {
   }
 
   // ── 1. Parse subject → extract quote_ref, type, recipient ─────────────────
+  console.log('[parse-email] raw subject:', JSON.stringify(subject.slice(0, 200)))
+
   const subjectData = parseSubject(subject)
+  console.log('[parse-email] parseSubject result: type=', subjectData.type,
+    'ref=', subjectData.quote_ref, 'company=', subjectData.recipient_company)
 
   // Fallback: try to extract quote ref from body HTML
   if (!subjectData.quote_ref) {
@@ -589,14 +593,22 @@ export default async function handler(req, res) {
     subjectData.quote_ref = parseQuoteRef(rawHtml)
   }
 
-  // Fallback: try to extract recipient company from body HTML
-  if (!subjectData.recipient_company) {
-    const bodyText = stripTags(body_html || html_field || '').slice(0, 400)
-    const dealerM  = bodyText.match(/FORHANDLER\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
-    const custM    = bodyText.match(/SLUTKUNDE\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
-    if (dealerM) { subjectData.type = 'dealer';   subjectData.recipient_company = dealerM[1].trim() }
-    if (custM)   { subjectData.type = 'customer'; subjectData.recipient_company = custM[1].trim() }
+  // Fallback: always re-check body HTML for SLUTKUNDE marker, regardless of whether
+  // parseSubject already found a recipient_company.  This prevents a FORHANDLER
+  // subject-line match from silently locking type='dealer' when the email is actually
+  // a customer (SLUTKUNDE) quote.
+  const bodyText = stripTags(body_html || html_field || '').slice(0, 400)
+  const dealerM  = bodyText.match(/FORHANDLER\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
+  const custM    = bodyText.match(/SLUTKUNDE\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
+  if (custM) {
+    // SLUTKUNDE in body wins unconditionally — it is the definitive signal
+    subjectData.type = 'customer'
+    if (!subjectData.recipient_company) subjectData.recipient_company = custM[1].trim()
+  } else if (dealerM && !subjectData.recipient_company) {
+    subjectData.type = 'dealer'
+    subjectData.recipient_company = dealerM[1].trim()
   }
+  console.log('[parse-email] final type=', subjectData.type, '(after body fallback)')
 
   // ── 2. Get line items – Admin API primary, HTML fallback ──────────────────
   let items  = null
