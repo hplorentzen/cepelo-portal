@@ -6,11 +6,14 @@
 // Body (JSON):
 //   customer_token       – identifies the quote (from the URL)
 //   selected_accessories – array of accessory objects the customer ticked
+//   main_gross           – dealer-edited main product gross price (number, excl. VAT)
+//   line_gross           – array of dealer-edited line item totals (price × qty, excl. VAT)
 //
 // On success:
-//   1. Marks quote as 'accepted' in Supabase
-//   2. Emails the dealer asking them to fill in workshop/order details
-//   3. Emails the CEPELO seller with acceptance confirmation + pricing
+//   1. Saves final dealer-edited prices back to Supabase
+//   2. Marks quote as 'accepted'
+//   3. Emails the dealer asking them to fill in workshop/order details
+//   4. Emails the CEPELO seller with acceptance confirmation + final pricing
 
 import { createClient } from '@supabase/supabase-js'
 import { sendEmail, orderConfirmedDealerEmail, orderConfirmedSellerEmail } from '../../lib/email'
@@ -24,7 +27,13 @@ const adminClient = createClient(
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const { customer_token, selected_accessories = [] } = req.body
+  const {
+    customer_token,
+    selected_accessories = [],
+    main_gross,
+    line_gross = [],
+  } = req.body
+
   if (!customer_token) return res.status(400).json({ error: 'customer_token is required' })
 
   // ── 1. Fetch quote ──────────────────────────────────────────────────────────
@@ -35,14 +44,40 @@ export default async function handler(req, res) {
     .single()
 
   if (fetchErr || !quote) return res.status(404).json({ error: 'Quote not found' })
-  if (quote.status === 'accepted') {
+  if (quote.status === 'accepted' || quote.status === 'order_submitted') {
     return res.status(200).json({ success: true, already_accepted: true })
   }
 
-  // ── 2. Mark as accepted ─────────────────────────────────────────────────────
+  // ── 2. Apply dealer-edited prices to main_product and line_items ────────────
+  // line_gross values are totals (price × qty); store per-unit gross_price in DB
+  const updatedMainProduct = quote.main_product
+    ? {
+        ...quote.main_product,
+        gross_price: (main_gross != null && main_gross > 0)
+          ? Math.round(main_gross)
+          : quote.main_product.gross_price,
+      }
+    : null
+
+  const updatedLineItems = (quote.line_items || []).map((item, idx) => {
+    const editedTotal = line_gross[idx]
+    if (editedTotal == null || editedTotal <= 0) return item
+    // Store per-unit price (total ÷ quantity)
+    const perUnit = Math.round(editedTotal / (item.quantity || 1))
+    return { ...item, gross_price: perUnit }
+  })
+
+  // ── 3. Save to Supabase ─────────────────────────────────────────────────────
+  const updatePayload = {
+    status:       'accepted',
+    accepted_at:  new Date().toISOString(),
+    line_items:   updatedLineItems,
+    ...(updatedMainProduct ? { main_product: updatedMainProduct } : {}),
+  }
+
   const { error: updateErr } = await adminClient
     .from('quotes')
-    .update({ status: 'accepted', accepted_at: new Date().toISOString() })
+    .update(updatePayload)
     .eq('customer_token', customer_token)
 
   if (updateErr) {
@@ -50,15 +85,18 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Supabase error: ${updateErr.message}` })
   }
 
-  // ── 3. Build product list (main + line items + selected accessories) ─────────
-  const mainProduct  = quote.main_product ? [quote.main_product] : []
-  const lineItems    = (quote.line_items || []).filter(i => i.sku !== 'DELIVERY')
-  const allProducts  = [...mainProduct, ...lineItems, ...(selected_accessories || [])]
+  // ── 4. Build final product list for emails ──────────────────────────────────
+  // Include ALL items: main product, all line items, selected accessories
+  const allProducts = [
+    ...(updatedMainProduct ? [updatedMainProduct] : []),
+    ...updatedLineItems,
+    ...(selected_accessories || []),
+  ]
 
   const baseUrl      = process.env.NEXT_PUBLIC_BASE_URL
   const orderFormUrl = `${baseUrl}/order/${quote.token}`
 
-  // ── 4. Email the dealer ─────────────────────────────────────────────────────
+  // ── 5. Email the dealer ─────────────────────────────────────────────────────
   if (quote.dealer_email) {
     try {
       const tpl = orderConfirmedDealerEmail({
@@ -75,7 +113,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── 5. Email the CEPELO seller ───────────────────────────────────────────────
+  // ── 6. Email the CEPELO seller ───────────────────────────────────────────────
   const sellerRecord = getSellerByEmail(quote.sender_email || '')
   const sellerEmail  = sellerRecord?.email || quote.sender_email
 

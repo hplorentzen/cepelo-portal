@@ -123,6 +123,9 @@ export default function QuotePage({ quote }) {
         body:    JSON.stringify({
           customer_token:       quote.customer_token,
           selected_accessories: selectedAccessories,
+          // Dealer-edited final prices (numeric, excl. VAT)
+          main_gross:  parsePrice(mainGross),
+          line_gross:  lineGross.map(v => parsePrice(v)),
         }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -149,14 +152,26 @@ export default function QuotePage({ quote }) {
 
   // ── Confirmation page (shown after customer accepts) ────────────────────────
   if (accepted) {
-    const confirmedProducts = [
-      ...(quote.main_product ? [quote.main_product] : []),
-      ...(quote.line_items   || []).filter(i => !['subscription','manual'].includes(i.type)),
-      ...selectedAccessories,
-    ]
-    const grossTotal = confirmedProducts.reduce((s, p) => s + ((p.gross_price || 0) * (p.quantity || 1)), 0)
-    const vatAmt     = Math.round(grossTotal * 0.25)
-    const inclVat    = grossTotal + vatAmt
+    // Build confirmed product list with dealer-edited prices
+    // lineGross stores formatted totals (price × qty already); parsePrice gives the number
+    const confirmedMain = quote.main_product
+      ? [{ ...quote.main_product, _total: parsePrice(mainGross) }]
+      : []
+
+    const confirmedLines = (quote.line_items || []).map((item, idx) => ({
+      ...item,
+      _total: parsePrice(lineGross[idx] ?? formatPrice((item.gross_price || 0) * (item.quantity || 1), lang)),
+    }))
+
+    const confirmedAccs = selectedAccessories.map(acc => ({
+      ...acc,
+      _total: (parsePrice(acc.gross_price) || 0) * (acc.quantity || 1),
+    }))
+
+    const allConfirmed = [...confirmedMain, ...confirmedLines, ...confirmedAccs]
+    const grossTotal   = allConfirmed.reduce((s, p) => s + (p._total || 0), 0)
+    const vatAmt       = Math.round(grossTotal * 0.25)
+    const inclVat      = grossTotal + vatAmt
 
     return (
       <>
@@ -204,19 +219,18 @@ export default function QuotePage({ quote }) {
             </div>
 
             {/* Product summary */}
-            {confirmedProducts.length > 0 && (
+            {allConfirmed.length > 0 && (
               <>
                 <div className="conf-section-label">Bestilte produkter</div>
                 <div style={{marginBottom:20}}>
-                  {confirmedProducts.map((p, i) => {
-                    const name  = typeof p.name === 'object' ? (p.name[lang] || p.name.da || p.sku) : (p.name || p.sku)
-                    const price = (p.gross_price || 0) * (p.quantity || 1)
+                  {allConfirmed.map((p, i) => {
+                    const name = typeof p.name === 'object' ? (p.name[lang] || p.name.da || p.sku) : (p.name || p.sku)
                     return (
                       <div key={i} className="conf-product">
                         <span className="conf-product-name">
-                          {name}{p.quantity > 1 ? <span style={{fontWeight:400,color:'#767686'}}> × {p.quantity}</span> : null}
+                          {name}{(p.quantity || 1) > 1 ? <span style={{fontWeight:400,color:'#767686'}}> × {p.quantity}</span> : null}
                         </span>
-                        {price > 0 && <span className="conf-product-price">{Math.round(price).toLocaleString('da-DK')} kr</span>}
+                        {(p._total || 0) > 0 && <span className="conf-product-price">{Math.round(p._total).toLocaleString('da-DK')} kr</span>}
                       </div>
                     )
                   })}
