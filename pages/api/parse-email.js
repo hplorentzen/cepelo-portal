@@ -30,7 +30,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes }  from 'crypto'
-import { fetchProductBySku, fetchDraftOrderByRef } from '../../lib/shopify'
+import { fetchProductBySku, fetchDraftOrderByRef, fetchProductRecommendations } from '../../lib/shopify'
 import { getAccessoriesForSku } from '../../lib/accessories'
 import { sendEmail, sellerNotificationEmail } from '../../lib/email'
 import { getSellerByEmail } from '../../lib/sellers'
@@ -636,6 +636,7 @@ export default async function handler(req, res) {
         description_html:   s.description_html,
         image_url:          s.image_url,
         images:             s.images,
+        video_url:          s.video_url || undefined,
         currency:           s.currency,
         vendor:             s.vendor,
         product_type:       s.product_type,
@@ -671,8 +672,29 @@ export default async function handler(req, res) {
 
   discounts.forEach(d => line_items.push(d))
 
-  // ── 5. Accessories ────────────────────────────────────────────────────────
-  const available_accessories = getAccessoriesForSku(first.sku)
+  // ── 5. Accessories — live Shopify recommendations, static fallback ────────
+  // Collect SKUs already in the quote so we can exclude them from suggestions
+  const quotedSkus = new Set(
+    [first.sku, ...rest.map(i => i.sku), ...manualItems.map(i => i.sku)]
+      .filter(Boolean)
+  )
+
+  let available_accessories = []
+  const mainProductGid = first.shopify?.shopify_product_id
+
+  if (mainProductGid) {
+    try {
+      const recs = await fetchProductRecommendations(mainProductGid)
+      available_accessories = recs.filter(r => r.sku && !quotedSkus.has(r.sku))
+      console.log(`[parse-email] Shopify recommendations: ${recs.length} total, ${available_accessories.length} after dedup`)
+    } catch (e) {
+      console.warn('[parse-email] Product recommendations fetch failed, falling back to static accessories:', e.message)
+      available_accessories = getAccessoriesForSku(first.sku)
+    }
+  } else {
+    console.log('[parse-email] No shopify_product_id on main product — using static accessories')
+    available_accessories = getAccessoriesForSku(first.sku)
+  }
 
   // ── 6. Parsed summary ─────────────────────────────────────────────────────
   const parsedSummary = {
