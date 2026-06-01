@@ -73,6 +73,7 @@ export default function QuotePage({ quote }) {
   }
 
   const selectedTotal       = selectedAccessories.reduce((sum, acc) => sum + (parsePrice(acc.gross_price) || 0), 0)
+  const selectedNetTotal    = selectedAccessories.reduce((sum, acc) => sum + (acc.net_price || 0), 0)
 
   // Base gross (main product + non-subscription line items, editable by dealer)
   const baseGrossTotal      = parsePrice(mainGross) +
@@ -82,14 +83,15 @@ export default function QuotePage({ quote }) {
   // Total gross including any optionally selected accessories
   const totalGrossOneTime   = baseGrossTotal + selectedTotal
 
-  // Fixed netto total from DB (not editable) — sum of net_price on all non-subscription items
+  // Netto total — sum of net_price on all non-subscription items + selected accessory net prices
   const totalNetOneTime     = (quote.main_product?.net_price || 0) +
     (quote.line_items || [])
       .filter(i => i.type !== 'subscription')
-      .reduce((sum, i) => sum + ((i.net_price || 0) * (i.quantity || 1)), 0)
+      .reduce((sum, i) => sum + ((i.net_price || 0) * (i.quantity || 1)), 0) +
+    selectedNetTotal
 
-  // Avance = dealer gross (editable, excl. accessories) minus fixed net
-  const avanceAmount        = baseGrossTotal - totalNetOneTime
+  // Avance = total dealer gross (incl. selected accessories) minus total net
+  const avanceAmount        = totalGrossOneTime - totalNetOneTime
   const avancePct           = totalNetOneTime > 0
     ? Math.round((avanceAmount / totalNetOneTime) * 100)
     : 0
@@ -214,8 +216,15 @@ export default function QuotePage({ quote }) {
         .acc-card.selected{border-color:var(--blue);background:var(--blue-light)}
         .acc-check{width:18px;height:18px;border-radius:4px;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px}
         .acc-card.selected .acc-check{background:var(--blue);border-color:var(--blue);color:white;font-size:11px}
-        .acc-name{font-family:'Montserrat',sans-serif;font-size:13px;font-weight:600;color:var(--navy);margin-bottom:3px}
+        .acc-thumb{width:52px;height:52px;border-radius:6px;object-fit:cover;flex-shrink:0;display:block;background:var(--card-bg)}
+        .acc-thumb-placeholder{width:52px;height:52px;border-radius:6px;background:var(--card-bg);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px}
+        .acc-body{flex:1;min-width:0}
+        .acc-name{font-family:'Montserrat',sans-serif;font-size:13px;font-weight:600;color:var(--navy);margin-bottom:2px}
+        .acc-prices{margin-top:2px}
+        .acc-netto{font-family:'Montserrat',sans-serif;font-size:11px;color:var(--ink-muted);font-weight:600}
         .acc-price{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:700;color:var(--blue)}
+        .acc-more{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:600;color:var(--blue);text-decoration:none;margin-top:4px;display:inline-block}
+        .acc-more:hover{text-decoration:underline}
         .leasing-block{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:20px}
         .leasing-title{font-family:'Montserrat',sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:800;color:var(--ink-muted);margin-bottom:12px}
         .leasing-amount{font-family:'Montserrat',sans-serif;font-size:32px;font-weight:800;color:var(--navy)}
@@ -592,12 +601,39 @@ export default function QuotePage({ quote }) {
                 return (
                   <div key={idx} className={`acc-card ${selected ? 'selected' : ''}`} onClick={() => toggleAccessory(acc)}>
                     <div className="acc-check">{selected && '✓'}</div>
-                    <div>
+                    {acc.image_url
+                      ? <img src={acc.image_url} alt={name} className="acc-thumb" />
+                      : <div className="acc-thumb-placeholder">📦</div>
+                    }
+                    <div className="acc-body">
                       <div className="acc-name">{name}</div>
-                      <div className="acc-price">
-                        {formatPrice(acc.gross_price, lang)}
-                        {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
-                      </div>
+                      {isDealer ? (
+                        <div className="acc-prices">
+                          {(acc.net_price || 0) > 0 && (
+                            <div className="acc-netto">Netto: {formatPrice(acc.net_price, lang)}</div>
+                          )}
+                          <div className="acc-price">
+                            {formatPrice(acc.gross_price, lang)}
+                            {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="acc-price">
+                          {formatPrice(acc.gross_price, lang)}
+                          {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
+                        </div>
+                      )}
+                      {acc.shopify_handle && (
+                        <a
+                          href={`https://cepelo.dk/products/${acc.shopify_handle}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="acc-more"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          Læs mere →
+                        </a>
+                      )}
                     </div>
                   </div>
                 )
