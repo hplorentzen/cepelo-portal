@@ -33,6 +33,7 @@ import { randomBytes }  from 'crypto'
 import { fetchProductBySku, fetchDraftOrderByRef } from '../../lib/shopify'
 import { getAccessoriesForSku } from '../../lib/accessories'
 import { sendEmail, sellerNotificationEmail } from '../../lib/email'
+import { getSellerByEmail } from '../../lib/sellers'
 
 const adminClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -509,11 +510,13 @@ export default async function handler(req, res) {
 
   // Parse "Name <email>" or bare "email" from the From header value
   const fromMatch  = seller_email.match(/^(.+?)\s*<([^>]+)>/)
-  let   sellerName = fromMatch ? fromMatch[1].trim() : ''
   const sellerAddr = fromMatch ? fromMatch[2].trim() : seller_email.trim()
 
-  // If Power Automate sends a bare email address (no display name),
-  // derive a readable name from the local part: "lars.nielsen@cepelo.dk" → "Lars Nielsen"
+  // Look up full seller record from the CEPELO directory (name, title, phone)
+  const sellerRecord = getSellerByEmail(sellerAddr)
+
+  // Determine display name: directory wins, then RFC 5322 display name, then derive from local part
+  let sellerName = sellerRecord?.name || (fromMatch ? fromMatch[1].trim() : '')
   if (!sellerName && sellerAddr.includes('@')) {
     sellerName = sellerAddr
       .split('@')[0]
@@ -736,7 +739,7 @@ export default async function handler(req, res) {
     status:            'draft',
     sender_name:       sellerName || '',
     sender_email:      sellerAddr || process.env.DEFAULT_SENDER_EMAIL || '',
-    sender_phone:      '',
+    sender_phone:      sellerRecord?.phone || '',
     recipient_name:    '',
     recipient_company: subjectData.recipient_company || '',
     recipient_email:   '',

@@ -22,6 +22,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { sendEmail, dealerQuoteEmail } from '../../lib/email'
 import { parsePrice } from '../../lib/format'
+import { getSellerByEmail } from '../../lib/sellers'
 
 const adminClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -114,23 +115,28 @@ export default async function handler(req, res) {
   const emailUrl = type === 'customer' ? customerUrl : quoteUrl
 
   try {
+    // Look up full seller info from directory (enriches name/title/phone/photo)
+    const sellerRecord = getSellerByEmail(quote.sender_email)
+
     // Log sender fields for debugging (values are safe — no secrets)
-    console.log(`[submit-seller-form] sender_name="${quote.sender_name}" sender_email="${quote.sender_email}" sender_phone="${quote.sender_phone}"`)
+    console.log(`[submit-seller-form] sender_name="${quote.sender_name}" sender_email="${quote.sender_email}" sender_phone="${quote.sender_phone}" directory_hit=${!!sellerRecord}`)
 
     const tpl = dealerQuoteEmail({
-      dealerName:  dealer_name || quote.dealer_name || '',
-      quoteRef:    quote.shopify_order_id,
-      products:    allProducts,
-      quoteUrl:    emailUrl,
-      senderName:  quote.sender_name  || undefined,   // undefined → no fake fallback; email shown if present
-      senderEmail: quote.sender_email || undefined,
-      senderPhone: quote.sender_phone || undefined,
-      notes:       s(notes) || undefined,
+      dealerName:   dealer_name || quote.dealer_name || '',
+      quoteRef:     quote.shopify_order_id,
+      products:     allProducts,
+      quoteUrl:     emailUrl,
+      senderName:   sellerRecord?.name  || quote.sender_name  || undefined,
+      senderTitle:  sellerRecord?.title || undefined,
+      senderEmail:  sellerRecord?.email || quote.sender_email || undefined,
+      senderPhone:  sellerRecord?.phone || quote.sender_phone || undefined,
+      senderPhoto:  sellerRecord?.photo || undefined,
+      notes:        s(notes) || undefined,
     })
     await sendEmail({
       to:      dealer_email,
       ...tpl,
-      replyTo: quote.sender_email || undefined,
+      replyTo: sellerRecord?.email || quote.sender_email || undefined,
     })
     console.log(`[submit-seller-form] Dealer email sent to ${dealer_email} for quote ${quote.shopify_order_id}`)
   } catch (emailErr) {
