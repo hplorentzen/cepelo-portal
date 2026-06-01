@@ -90,13 +90,18 @@ export default async function handler(req, res) {
   let lineItems   = [...(quote.line_items || [])]
 
   if (type === 'customer') {
+    // gross_price = net_price when net_price > 0 (the draft-order discounted price).
+    // Falls back to keeping gross_price unchanged when net_price is 0 or missing
+    // (e.g. quotes originally stored with the old customer-zeroing code).
     const toCustomerPrice = item => {
       if (!item) return item
       if (item.type === 'discount' || item.sku === 'DELIVERY') return item
-      return { ...item, gross_price: item.net_price || item.gross_price, net_price: 0 }
+      const discountedPrice = item.net_price > 0 ? item.net_price : item.gross_price
+      return { ...item, gross_price: discountedPrice, net_price: 0 }
     }
     mainProduct = toCustomerPrice(mainProduct)
     lineItems   = lineItems.map(toCustomerPrice)
+    console.log('[submit] customer pricing applied — main gross_price will be', mainProduct.gross_price)
   }
 
   // Optional agreed-price override (applied on top of type-based recalculation)
