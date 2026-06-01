@@ -119,7 +119,9 @@ export default async function handler(req, res) {
       quoteRef:    quote.shopify_order_id,
       products:    allProducts,
       quoteUrl:    emailUrl,
-      senderName:  quote.sender_name || 'CEPELO Salgsteam',
+      senderName:  quote.sender_name  || 'CEPELO Salgsteam',
+      senderEmail: quote.sender_email || undefined,
+      senderPhone: quote.sender_phone || undefined,
       notes:       s(notes) || undefined,
     })
     await sendEmail({

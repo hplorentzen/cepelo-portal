@@ -83,10 +83,26 @@ export default function QuotePage({ quote }) {
   }
 
   const selectedTotal       = selectedAccessories.reduce((sum, acc) => sum + (parsePrice(acc.gross_price) || 0), 0)
-  const totalGrossOneTime   = parsePrice(mainGross) +
+
+  // Base gross (main product + non-subscription line items, editable by dealer)
+  const baseGrossTotal      = parsePrice(mainGross) +
     lineGross.filter((_, idx) => (quote.line_items || [])[idx]?.type !== 'subscription')
-             .reduce((a, v) => a + parsePrice(v), 0) +
-    selectedTotal
+             .reduce((a, v) => a + parsePrice(v), 0)
+
+  // Total gross including any optionally selected accessories
+  const totalGrossOneTime   = baseGrossTotal + selectedTotal
+
+  // Fixed netto total from DB (not editable) — sum of net_price on all non-subscription items
+  const totalNetOneTime     = (quote.main_product?.net_price || 0) +
+    (quote.line_items || [])
+      .filter(i => i.type !== 'subscription')
+      .reduce((sum, i) => sum + ((i.net_price || 0) * (i.quantity || 1)), 0)
+
+  // Avance = dealer gross (editable, excl. accessories) minus fixed net
+  const avanceAmount        = baseGrossTotal - totalNetOneTime
+  const avancePct           = totalNetOneTime > 0
+    ? Math.round((avanceAmount / totalNetOneTime) * 100)
+    : 0
 
   const leasing = calcLeasing(totalGrossOneTime)
 
@@ -219,6 +235,9 @@ export default function QuotePage({ quote }) {
         .totals-grid{display:grid;grid-template-columns:1fr auto;gap:10px 32px;align-items:baseline}
         .t-label{font-size:13px;color:rgba(255,255,255,.6)} .t-value{font-family:'Montserrat',sans-serif;font-size:16px;font-weight:700;text-align:right}
         .t-label.main{font-family:'Montserrat',sans-serif;color:rgba(255,255,255,.9);font-weight:600} .t-value.main{font-size:26px;font-weight:800}
+        .t-label.avance{font-family:'Montserrat',sans-serif;color:rgba(255,255,255,.9);font-weight:600}
+        .t-value.avance{color:#81c784;font-size:18px;font-weight:800} .t-value.avance.neg{color:#ef9a9a}
+        .avance-pct{font-size:12px;opacity:.75;margin-left:8px;font-weight:600}
         .t-divider{grid-column:1/-1;border:none;border-top:1px solid rgba(255,255,255,.15);margin:8px 0}
         .totals-note{font-size:12px;color:rgba(255,255,255,.4);margin-top:16px}
         .dealer-tools{margin-top:28px;background:var(--blue-light);border:1px solid #c0d8ee;border-radius:12px;padding:24px 28px}
@@ -599,17 +618,43 @@ export default function QuotePage({ quote }) {
         {/* ── Totals ─────────────────────────────────────────────────────────── */}
         <div className={`totals-block ${isDealer ? 'dealer' : 'customer'}`}>
           <div className="totals-grid">
-            <div className="t-label">{tr.subtotal}</div>
-            <div className="t-value">{formatPrice(totalGrossOneTime, lang)}</div>
-            {!isDealer && (
+            {isDealer ? (
               <>
+                {/* Netto i alt — fixed from DB */}
+                <div className="t-label">
+                  {lang === 'no' ? 'Nettopris totalt' : lang === 'is' ? 'Nettóverð alls' : 'Nettopris i alt'}
+                </div>
+                <div className="t-value">{formatPrice(totalNetOneTime, lang)}</div>
+
+                {/* Brutto i alt — updates live as dealer edits prices */}
+                <div className="t-label main">
+                  {lang === 'no' ? 'Bruttopris totalt' : lang === 'is' ? 'Heildarverð' : 'Bruttopris i alt'}
+                </div>
+                <div className="t-value main">{formatPrice(totalGrossOneTime, lang)}</div>
+
+                <hr className="t-divider" />
+
+                {/* Avance — green when positive, red when below net */}
+                <div className="t-label avance">
+                  {lang === 'no' ? 'Avanse' : lang === 'is' ? 'Framlegð' : 'Avance'}
+                </div>
+                <div className={`t-value avance${avanceAmount < 0 ? ' neg' : ''}`}>
+                  {avanceAmount < 0 ? '−' : ''}{formatPrice(Math.abs(avanceAmount), lang)}
+                  <span className="avance-pct">{avancePct >= 0 ? '+' : ''}{avancePct}%</span>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Customer view: brutto → VAT → total incl. VAT */}
+                <div className="t-label">{tr.subtotal}</div>
+                <div className="t-value">{formatPrice(totalGrossOneTime, lang)}</div>
                 <div className="t-label">{tr.vat}</div>
                 <div className="t-value">{formatPrice(calcVat(totalGrossOneTime, lang), lang)}</div>
+                <hr className="t-divider" />
+                <div className="t-label main">{tr.totalInclVat}</div>
+                <div className="t-value main">{formatPrice(addVat(totalGrossOneTime, lang), lang)}</div>
               </>
             )}
-            <hr className="t-divider" />
-            <div className="t-label main">{isDealer ? tr.total : tr.totalInclVat}</div>
-            <div className="t-value main">{formatPrice(isDealer ? totalGrossOneTime : addVat(totalGrossOneTime, lang), lang)}</div>
           </div>
           <div className="totals-note">{isDealer ? `${tr.allPricesExcl} · ${tr.netPricesNote}` : tr.paymentTerms}</div>
         </div>
