@@ -1,4 +1,5 @@
 // pages/api/submit-seller-form.js
+// VERSION: 2026-06-01-FINAL
 //
 // Receives the completed seller form, updates the draft quote to 'sent', and
 // emails the dealer their quote link.
@@ -30,6 +31,7 @@ const adminClient = createClient(
 )
 
 export default async function handler(req, res) {
+  console.log('VERSION CHECK: submit-seller-form loaded')
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const {
