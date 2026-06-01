@@ -4,17 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { getT } from '../../lib/translations'
 import { formatPrice, addVat, calcVat, parsePrice } from '../../lib/format'
 import { calcLeasing } from '../../lib/leasing'
-
-// ── Dealer logo via Brandfetch CDN (issue #12) ───────────────────────────────
-// Skip generic consumer domains — only company domains get a logo lookup.
-const CONSUMER_DOMAINS = new Set(['gmail.com','hotmail.com','outlook.com','yahoo.com','icloud.com','live.com','me.com','msn.com'])
-
-function getDealerLogoUrl(email) {
-  if (!email) return null
-  const domain = email.split('@')[1]?.toLowerCase()
-  if (!domain || CONSUMER_DOMAINS.has(domain)) return null
-  return `https://cdn.brandfetch.io/${domain}/theme/light/logo`
-}
+import { getDealerInfo } from '../../lib/dealers'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -135,8 +125,9 @@ export default function QuotePage({ quote }) {
   const isAutodiagnose = quote.category === 'Autodiagnose' ||
     (quote.main_product?.product_type || '').toLowerCase().includes('diagnos')
 
-  // Dealer logo URL (issue #12)
-  const dealerLogoUrl = isDealer ? getDealerLogoUrl(quote.dealer_email) : null
+  // Dealer branding — available in both dealer and customer views
+  const dealerInfo    = getDealerInfo(quote.dealer_email)
+  const dealerLogoUrl = dealerInfo?.logoUrl || null
 
   // Shopify ref for display (hide placeholder value 'PARSED')
   const shopifyRef = quote.shopify_order_id && quote.shopify_order_id !== 'PARSED'
@@ -269,7 +260,30 @@ export default function QuotePage({ quote }) {
         {/* ── Quote header ───────────────────────────────────────────────────── */}
         <div className="quote-header">
           <div>
-            <img src="/cepelo-logo.png" alt="CEPELO" style={{height:40,display:'block',marginBottom:6}} />
+            {/* Dealer view: CEPELO logo + dealer logo side by side
+                Customer view: dealer logo only (no CEPELO branding) */}
+            {isDealer ? (
+              <div style={{display:'flex',alignItems:'center',gap:20,marginBottom:6}}>
+                <img src="/cepelo-logo.png" alt="CEPELO" style={{height:40,display:'block'}} />
+                {dealerLogoUrl && (
+                  <img
+                    src={dealerLogoUrl}
+                    alt={quote.dealer_name || ''}
+                    style={{height:36,maxWidth:130,objectFit:'contain',display:'block'}}
+                    onError={e => { e.target.style.display = 'none' }}
+                  />
+                )}
+              </div>
+            ) : (
+              dealerLogoUrl
+                ? <img
+                    src={dealerLogoUrl}
+                    alt={quote.dealer_name || ''}
+                    style={{height:40,maxWidth:160,objectFit:'contain',display:'block',marginBottom:6}}
+                    onError={e => { e.target.style.display = 'none' }}
+                  />
+                : null
+            )}
             <div className="tagline">{tr.tagline}</div>
             {isDealer && quote.dealer_name && (
               <div className="header-dealer">
@@ -294,15 +308,6 @@ export default function QuotePage({ quote }) {
           {isDealer && (
             <div className="party-card">
               <div className="party-role">Forhandler</div>
-              {/* Dealer logo (issue #12) */}
-              {dealerLogoUrl && (
-                <img
-                  className="party-logo"
-                  src={dealerLogoUrl}
-                  alt={quote.dealer_name}
-                  onError={e => { e.target.style.display = 'none' }}
-                />
-              )}
               <div className="party-name">{quote.dealer_name || '—'}</div>
               <div className="party-details">
                 {quote.dealer_email && <>{quote.dealer_email}<br /></>}

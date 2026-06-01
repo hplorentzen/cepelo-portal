@@ -134,6 +134,7 @@ export default async function handler(req, res) {
 
     const tpl = dealerQuoteEmail({
       dealerName:   dealer_name || quote.dealer_name || '',
+      dealerEmail:  dealer_email,
       quoteRef:     quote.shopify_order_id,
       products:     allProducts,
       quoteUrl:     emailUrl,
