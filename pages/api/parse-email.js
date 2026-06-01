@@ -651,6 +651,7 @@ export default async function handler(req, res) {
   }
 
   const main_product = buildProduct(first)
+  console.log('[video] main_product.video_url:', main_product.video_url)
   const line_items   = rest.map(buildProduct)
 
   manualItems.forEach(item => line_items.push({
