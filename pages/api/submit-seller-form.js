@@ -51,6 +51,10 @@ export default async function handler(req, res) {
   if (!draft_token)  return res.status(400).json({ error: 'draft_token is required' })
   if (!dealer_email) return res.status(400).json({ error: 'dealer_email is required' })
 
+  // ── Diagnostics ──────────────────────────────────────────────────────────
+  console.log('[submit] type=', type)
+  console.log('[submit] draft_token=', draft_token)
+
   // ── 1. Fetch the draft quote ───────────────────────────────────────────────
   const { data: quote, error: fetchErr } = await adminClient
     .from('quotes')
@@ -58,8 +62,17 @@ export default async function handler(req, res) {
     .eq('draft_token', draft_token)
     .single()
 
-  if (fetchErr || !quote) return res.status(404).json({ error: 'Draft quote not found' })
+  if (fetchErr || !quote) {
+    console.log('[submit] quote NOT FOUND for draft_token=', draft_token, 'fetchErr=', fetchErr?.message)
+    return res.status(404).json({ error: 'Draft quote not found' })
+  }
+
+  console.log('[submit] quote found: id=', quote.id, 'status=', quote.status,
+    'main_product.gross_price=', quote.main_product?.gross_price,
+    'main_product.net_price=',   quote.main_product?.net_price)
+
   if (quote.status !== 'draft') {
+    console.log('[submit] BLOCKED — quote status is', quote.status, '(not draft), update skipped')
     return res.status(409).json({ error: 'Quote has already been submitted', status: quote.status })
   }
 
@@ -92,6 +105,9 @@ export default async function handler(req, res) {
     mainProduct = { ...mainProduct, gross_price: agreedNum }
   }
 
+  console.log('[submit] mainProduct AFTER pricing: gross_price=', mainProduct.gross_price,
+    'net_price=', mainProduct.net_price)
+
   // ── 3. Build dealer notes (seller message + address context) ─────────────
   const s = (v) => (v || '').trim()
   const noteParts = []
@@ -121,9 +137,11 @@ export default async function handler(req, res) {
     .eq('draft_token', draft_token)
 
   if (updateErr) {
-    console.error('[submit-seller-form] Supabase update error:', updateErr)
+    console.error('[submit] Supabase update ERROR:', updateErr.message, updateErr)
     return res.status(500).json({ error: `Supabase error: ${updateErr.message}` })
   }
+  console.log('[submit] Supabase update SUCCESS — type=', type,
+    'main_product.gross_price written=', mainProduct.gross_price)
 
   const baseUrl    = process.env.NEXT_PUBLIC_BASE_URL
   const quoteUrl   = `${baseUrl}/quote/${quote.token}`
