@@ -73,7 +73,6 @@ export default function QuotePage({ quote }) {
   }
 
   const selectedTotal       = selectedAccessories.reduce((sum, acc) => sum + (parsePrice(acc.gross_price) || 0), 0)
-  const selectedNetTotal    = selectedAccessories.reduce((sum, acc) => sum + (acc.net_price || 0), 0)
 
   // Base gross (main product + non-subscription line items, editable by dealer)
   const baseGrossTotal      = parsePrice(mainGross) +
@@ -83,12 +82,11 @@ export default function QuotePage({ quote }) {
   // Total gross including any optionally selected accessories
   const totalGrossOneTime   = baseGrossTotal + selectedTotal
 
-  // Netto total — sum of net_price on all non-subscription items + selected accessory net prices
+  // Netto total — main product + non-subscription line items only (accessories excluded)
   const totalNetOneTime     = (quote.main_product?.net_price || 0) +
     (quote.line_items || [])
       .filter(i => i.type !== 'subscription')
-      .reduce((sum, i) => sum + ((i.net_price || 0) * (i.quantity || 1)), 0) +
-    selectedNetTotal
+      .reduce((sum, i) => sum + ((i.net_price || 0) * (i.quantity || 1)), 0)
 
   // Avance = total dealer gross (incl. selected accessories) minus total net
   const avanceAmount        = totalGrossOneTime - totalNetOneTime
@@ -226,9 +224,7 @@ export default function QuotePage({ quote }) {
         .acc-thumb-placeholder{width:52px;height:52px;border-radius:6px;background:var(--card-bg);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:20px}
         .acc-body{flex:1;min-width:0}
         .acc-name{font-family:'Montserrat',sans-serif;font-size:13px;font-weight:600;color:var(--navy);margin-bottom:2px}
-        .acc-prices{margin-top:2px}
-        .acc-netto{font-family:'Montserrat',sans-serif;font-size:11px;color:var(--ink-muted);font-weight:600}
-        .acc-price{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:700;color:var(--blue)}
+        .acc-price{font-family:'Montserrat',sans-serif;font-size:14px;font-weight:700;color:var(--blue);margin-top:2px}
         .acc-more{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:600;color:var(--blue);text-decoration:none;margin-top:4px;display:inline-block}
         .acc-more:hover{text-decoration:underline}
         .leasing-block{background:var(--card-bg);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:20px}
@@ -618,22 +614,10 @@ export default function QuotePage({ quote }) {
                     }
                     <div className="acc-body">
                       <div className="acc-name">{name}</div>
-                      {isDealer ? (
-                        <div className="acc-prices">
-                          {(acc.net_price || 0) > 0 && (
-                            <div className="acc-netto">Netto: {formatPrice(acc.net_price, lang)}</div>
-                          )}
-                          <div className="acc-price">
-                            {formatPrice(acc.gross_price, lang)}
-                            {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="acc-price">
-                          {formatPrice(acc.gross_price, lang)}
-                          {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
-                        </div>
-                      )}
+                      <div className="acc-price">
+                        {formatPrice(acc.gross_price, lang)}
+                        {acc.badge === 'yearly' ? tr.perYear : acc.badge === 'monthly' ? tr.perMonth : ''}
+                      </div>
                       {acc.shopify_handle && (
                         <a
                           href={`https://cepelo.dk/products/${acc.shopify_handle}`}
