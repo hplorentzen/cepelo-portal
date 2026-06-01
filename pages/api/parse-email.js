@@ -448,11 +448,8 @@ function buildItemsFromDraftOrder(draftOrder) {
     // net_price = dealer price after any LINE-level discounts (used for dealer quotes)
     const net_price   = Math.round(unitPrice - discountAmt / qty)
 
-    // Diagnostic: log raw Shopify price fields so we can verify which value to use
-    console.log('[customer] SKU', item.sku,
-      'price=', item.price,
-      'compare_at=', item.compare_at_price,
-      'discount=', item.applied_discount?.amount)
+    // Diagnostic: log raw Shopify price fields so we can verify which value is used
+    console.log('[customer-price]', item.sku, 'item.price=', item.price, 'compare_at=', item.compare_at_price)
 
     const hasSku = item.sku && item.sku.trim() && !item.custom
     if (hasSku) {
@@ -661,9 +658,9 @@ export default async function handler(req, res) {
       name:        s?.name || item.name,
       quantity:    item.quantity,
       net_price:   isCustomerQuote ? 0 : item.net_price,
-      // Customer quotes: use shopify_price (item.price from draft order = final agreed price,
-      // discount already applied). Fall back to net_price for HTML-parsed quotes.
-      gross_price: isCustomerQuote ? (item.shopify_price ?? item.net_price) : (s?.gross_price || 0),
+      // Customer quotes: use net_price (= item.price − applied_discount/qty), which correctly
+      // handles both custom-priced orders (discount=0) and discounted orders (discount>0).
+      gross_price: isCustomerQuote ? item.net_price : (s?.gross_price || 0),
     }
   }
 
