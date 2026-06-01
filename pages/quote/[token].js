@@ -33,6 +33,8 @@ export default function QuotePage({ quote }) {
   // Acceptance flow
   const [accepted,       setAccepted]       = useState(false)
   const [acceptLoading,  setAcceptLoading]  = useState(false)
+  // PDF download
+  const [pdfLoading,     setPdfLoading]     = useState(false)
 
   useEffect(() => {
     // Dealer view: match by token; Customer view: match by customer_token
@@ -120,6 +122,30 @@ export default function QuotePage({ quote }) {
     setSelectedAccessories(prev =>
       prev.find(a => a.sku === acc.sku) ? prev.filter(a => a.sku !== acc.sku) : [...prev, acc]
     )
+  }
+
+  // Download customer-facing PDF (gross prices only, dealer logo)
+  const handleDownloadPdf = async () => {
+    if (pdfLoading) return
+    setPdfLoading(true)
+    try {
+      const res = await fetch(`/api/generate-pdf?token=${quote.token}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `tilbud-${(quote.token || '').slice(-6).toUpperCase()}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('[pdf] download failed:', e)
+      alert('PDF-generering fejlede – prøv igen eller kontakt CEPELO.')
+    } finally {
+      setPdfLoading(false)
+    }
   }
 
   const handleAccept = async () => {
@@ -901,6 +927,16 @@ export default function QuotePage({ quote }) {
               <a className="btn btn-secondary" href={`/quote/${quote.token}`} target="_blank" rel="noopener noreferrer">
                 ↗ Åbn tilbud igen
               </a>
+              {/* Download customer-facing PDF */}
+              <button
+                className="btn btn-secondary"
+                onClick={handleDownloadPdf}
+                disabled={pdfLoading}
+                style={pdfLoading ? { opacity: 0.65, cursor: 'wait' } : {}}
+                title="Hent et PDF-tilbud til kunden (kun bruttopriser)"
+              >
+                {pdfLoading ? '…' : '↓ Download PDF'}
+              </button>
               {/* Send to customer via mailto (includes dealer's note from textarea) */}
               <button
                 className="btn btn-primary"
