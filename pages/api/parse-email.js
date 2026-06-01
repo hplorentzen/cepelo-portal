@@ -704,10 +704,11 @@ export default async function handler(req, res) {
       name:        s?.name || item.name,
       quantity:    item.quantity,
       net_price:   isCustomerQuote ? 0 : item.net_price,
-      // Customer quotes: shopify_price = item.price after proportional order-level discount
-      // (computed in buildItemsFromDraftOrder). Falls back to net_price for HTML-parsed quotes
-      // that have no shopify_price field.
-      gross_price: isCustomerQuote ? (item.shopify_price ?? item.net_price) : (s?.gross_price || 0),
+      // Customer quotes: net_price = item.price − item.applied_discount.amount / qty,
+      // which already reflects any line-level discount (e.g. 66995 − 31095 = 35900).
+      // Order-level discount is handled proportionally via shopify_price when present,
+      // but net_price is the authoritative final price for line-discount orders.
+      gross_price: isCustomerQuote ? item.net_price : (s?.gross_price || 0),
     }
   }
 
