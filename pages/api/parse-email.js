@@ -430,37 +430,82 @@ function buildItemsFromEmail(emailHtml, debugCollector = null) {
 // ── PRIMARY: Shopify Admin API parsing ───────────────────────────────────────
 //
 // Price semantics (Shopify Admin REST):
-//   item.price             – original unit price BEFORE any line-level discount
-//   item.applied_discount  – { amount: "<total_line_discount>", type, value }
-//   net_price per unit     = price − (applied_discount.amount / quantity)
+//   item.price              – unit price (before any line-level discount)
+//   item.applied_discount   – { amount, type, value } — LINE-level discount
+//   draftOrder.applied_discount – ORDER-level discount applied after subtotal
+//
+// For dealer quotes:
+//   net_price = item.price − item.applied_discount.amount / qty
+//   Order-level discount → pushed as a separate 'discount' line item
+//
+// For customer quotes:
+//   The order-level discount is distributed proportionally across items by
+//   price weight so each item's gross_price already reflects the discount.
+//   No separate discount line item is emitted for customer quotes.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildItemsFromDraftOrder(draftOrder) {
+function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
   const skuItems    = []
   const manualItems = []
   const discounts   = []
   let   delivery    = null
 
-  for (const item of (draftOrder.line_items || [])) {
-    const unitPrice   = parseFloat(item.price || 0)
-    const discountAmt = parseFloat(item.applied_discount?.amount || 0)
-    const qty         = Math.max(item.quantity || 1, 1)
-    // net_price = dealer price after any LINE-level discounts (used for dealer quotes)
-    const net_price   = Math.round(unitPrice - discountAmt / qty)
+  // ── Log order-level discount so we can see where the discount lives ─────────
+  console.log('[order-discount]', draftOrder.applied_discount)
 
-    // Diagnostic: log raw Shopify price fields so we can verify which value is used
-    console.log('[customer-price]', item.sku, 'item.price=', item.price, 'compare_at=', item.compare_at_price)
+  const od               = draftOrder.applied_discount
+  const orderDiscountAmt = parseFloat(od?.amount || 0)
+
+  // Pre-compute total (price × qty) across all line items for proportional split
+  let totalBeforeDiscount = 0
+  if (isCustomerQuote && orderDiscountAmt > 0) {
+    for (const item of (draftOrder.line_items || [])) {
+      totalBeforeDiscount +=
+        parseFloat(item.price || 0) * Math.max(item.quantity || 1, 1)
+    }
+    console.log('[order-discount] isCustomerQuote=true, orderDiscountAmt=', orderDiscountAmt,
+      'totalBeforeDiscount=', totalBeforeDiscount)
+  }
+
+  for (const item of (draftOrder.line_items || [])) {
+    const unitPrice    = parseFloat(item.price || 0)
+    const lineDiscAmt  = parseFloat(item.applied_discount?.amount || 0)
+    const qty          = Math.max(item.quantity || 1, 1)
+
+    // Log both discount locations so we can confirm where the 31 095 lives
+    console.log('[customer-price]', item.sku,
+      'item.price=', item.price,
+      'compare_at=', item.compare_at_price,
+      'item.applied_discount=', item.applied_discount,
+      'order.applied_discount=', draftOrder.applied_discount)
+
+    // Dealer net_price: item price minus any LINE-level discount
+    const net_price = Math.round(unitPrice - lineDiscAmt / qty)
+
+    // Customer gross_price: item price minus its proportional share of the
+    // ORDER-level discount.  Falls back to unitPrice when no order discount.
+    let shopify_price = Math.round(unitPrice)
+    if (isCustomerQuote && orderDiscountAmt > 0 && totalBeforeDiscount > 0) {
+      const lineTotal      = unitPrice * qty
+      const itemDiscount   = (lineTotal / totalBeforeDiscount) * orderDiscountAmt
+      const finalUnitPrice = unitPrice - (itemDiscount / qty)
+      shopify_price        = Math.round(finalUnitPrice)
+      console.log('[order-discount] SKU', item.sku,
+        'lineTotal=', lineTotal,
+        'itemDiscount=', Math.round(itemDiscount),
+        'finalUnitPrice=', shopify_price)
+    }
 
     const hasSku = item.sku && item.sku.trim() && !item.custom
     if (hasSku) {
       skuItems.push({
-        sku:           item.sku.trim().toUpperCase(),
-        name:          item.title || item.sku,
-        quantity:      qty,
+        sku:          item.sku.trim().toUpperCase(),
+        name:         item.title || item.sku,
+        quantity:     qty,
         net_price,
-        // shopify_price = item.price as-is from Shopify (already post-discount for custom-priced
-        // draft orders; used as gross_price for customer quotes instead of re-subtracting discount)
-        shopify_price: Math.round(unitPrice),
+        // shopify_price = post-order-discount unit price for customer quotes;
+        // equals item.price (no adjustment) for dealer quotes.
+        shopify_price,
       })
     } else {
       manualItems.push({
@@ -473,9 +518,10 @@ function buildItemsFromDraftOrder(draftOrder) {
   const shippingPrice = parseFloat(draftOrder.shipping_line?.price || 0)
   if (shippingPrice > 0) delivery = Math.round(shippingPrice)
 
-  const od = draftOrder.applied_discount
-  if (od && parseFloat(od.amount || 0) > 0) {
-    const amt = Math.round(parseFloat(od.amount))
+  // Order-level discount → separate line for dealer quotes only.
+  // For customer quotes it has already been folded into shopify_price above.
+  if (!isCustomerQuote && orderDiscountAmt > 0) {
+    const amt = Math.round(orderDiscountAmt)
     discounts.push({
       sku: null, name: od.title || 'Rabat', quantity: 1,
       net_price: -amt, gross_price: -amt, type: 'discount',
@@ -561,7 +607,7 @@ export default async function handler(req, res) {
     try {
       const draftOrder = await fetchDraftOrderByRef(subjectData.quote_ref)
       if (draftOrder) {
-        items  = buildItemsFromDraftOrder(draftOrder)
+        items  = buildItemsFromDraftOrder(draftOrder, subjectData.type === 'customer')
         source = 'shopify_admin_api'
         console.log(`[parse-email] Loaded ${subjectData.quote_ref} from Shopify Admin API`)
       } else {
@@ -658,9 +704,10 @@ export default async function handler(req, res) {
       name:        s?.name || item.name,
       quantity:    item.quantity,
       net_price:   isCustomerQuote ? 0 : item.net_price,
-      // Customer quotes: use net_price (= item.price − applied_discount/qty), which correctly
-      // handles both custom-priced orders (discount=0) and discounted orders (discount>0).
-      gross_price: isCustomerQuote ? item.net_price : (s?.gross_price || 0),
+      // Customer quotes: shopify_price = item.price after proportional order-level discount
+      // (computed in buildItemsFromDraftOrder). Falls back to net_price for HTML-parsed quotes
+      // that have no shopify_price field.
+      gross_price: isCustomerQuote ? (item.shopify_price ?? item.net_price) : (s?.gross_price || 0),
     }
   }
 
