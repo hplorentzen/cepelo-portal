@@ -115,11 +115,22 @@ export default async function handler(req, res) {
   const emailUrl = type === 'customer' ? customerUrl : quoteUrl
 
   try {
-    // Look up full seller info from directory (enriches name/title/phone/photo)
-    const sellerRecord = getSellerByEmail(quote.sender_email)
+    // ── Seller directory lookup diagnostics ─────────────────────────────────
+    const rawSenderEmail = quote.sender_email || ''
+    const trimmedEmail   = rawSenderEmail.trim().toLowerCase()
+    const sellerRecord   = getSellerByEmail(rawSenderEmail)
 
-    // Log sender fields for debugging (values are safe — no secrets)
-    console.log(`[submit-seller-form] sender_name="${quote.sender_name}" sender_email="${quote.sender_email}" sender_phone="${quote.sender_phone}" directory_hit=${!!sellerRecord}`)
+    console.log('[submit-seller-form] --- SELLER LOOKUP DIAGNOSTICS ---')
+    console.log(`[submit-seller-form] quote.sender_email raw   : "${rawSenderEmail}" (length=${rawSenderEmail.length})`)
+    console.log(`[submit-seller-form] normalised for lookup     : "${trimmedEmail}"`)
+    console.log(`[submit-seller-form] quote.sender_name raw     : "${quote.sender_name}"`)
+    console.log(`[submit-seller-form] quote.sender_phone raw    : "${quote.sender_phone}"`)
+    console.log(`[submit-seller-form] directory_hit             : ${!!sellerRecord}`)
+    if (sellerRecord) {
+      console.log(`[submit-seller-form] directory match           : ${sellerRecord.name} / ${sellerRecord.title}`)
+    } else {
+      console.log('[submit-seller-form] ⚠ email not in sellers.js — known addresses: bc, htm, ahs, lba, tt, tah, at, mr @cepelo.dk')
+    }
 
     const tpl = dealerQuoteEmail({
       dealerName:   dealer_name || quote.dealer_name || '',
