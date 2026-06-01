@@ -49,11 +49,12 @@ export default function QuotePage({ quote }) {
   )
 
   const accessories     = quote.available_accessories || []
-  // Product line items: regular products (no typed sub-items, no manual lines)
+  // Product line items: regular products (no typed sub-items, no manual/discount lines)
   const productLineItems = (quote.line_items || []).filter(i =>
-    !['accessory', 'software', 'subscription', 'manual'].includes(i.type)
+    !['accessory', 'software', 'subscription', 'manual', 'discount'].includes(i.type)
   )
-  const manualLineItems  = (quote.line_items || []).filter(i => i.type === 'manual')
+  const manualLineItems   = (quote.line_items || []).filter(i => i.type === 'manual')
+  const discountLineItems = (quote.line_items || []).filter(i => i.type === 'discount')
   // Typed sub-items shown inside the main product block
   const hardware         = (quote.line_items || []).filter(i => i.type === 'accessory')
   const software         = (quote.line_items || []).filter(i => i.type === 'software')
@@ -368,6 +369,7 @@ export default function QuotePage({ quote }) {
         .software-update-icon{font-size:20px;flex-shrink:0}
         .software-update-title{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:700;color:var(--orange);letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px}
         .software-update-sub{font-size:12px;color:var(--ink-light)}
+        .item-price.discount{color:var(--green);font-weight:700}
         .sw-info-box{display:flex;align-items:flex-start;gap:12px;background:#e0f0fa;border-radius:10px;padding:14px 18px;margin-bottom:20px}
         .sw-info-icon{font-size:18px;flex-shrink:0;line-height:1.5}
         .sw-info-text{font-size:13px;color:#173454;line-height:1.65}
@@ -742,17 +744,29 @@ export default function QuotePage({ quote }) {
         )}
 
         {/* ── Manual line items (fragt, montering etc.) ──────────────────────── */}
-        {manualLineItems.length > 0 && (
+        {(manualLineItems.length > 0 || discountLineItems.length > 0) && (
           <>
             <div className="section-title" style={{marginTop:24}}>Øvrige poster</div>
             <div className="product-block" style={{marginBottom:8}}>
               {manualLineItems.map((item, idx) => (
-                <div key={idx} className="sub-item" style={{borderTop:idx===0?'none':undefined}}>
+                <div key={`m${idx}`} className="sub-item" style={{borderTop:idx===0?'none':undefined}}>
                   <div><div className="item-name" style={{fontSize:15}}>{item.name}</div></div>
                   <div className="item-qty">1 stk.</div>
                   <div className="item-price">{formatPrice(item.gross_price || item.net_price, lang)}</div>
                 </div>
               ))}
+              {discountLineItems.map((item, idx) => {
+                const amount = Math.abs(item.gross_price || item.net_price || 0)
+                return (
+                  <div key={`d${idx}`} className="sub-item" style={{borderTop:(manualLineItems.length > 0 || idx > 0) ? undefined : 'none'}}>
+                    <div>
+                      <div className="item-name" style={{fontSize:15}}>Rabat – {item.name}</div>
+                    </div>
+                    <div className="item-qty">—</div>
+                    <div className="item-price discount">−{formatPrice(amount, lang)}</div>
+                  </div>
+                )
+              })}
             </div>
           </>
         )}

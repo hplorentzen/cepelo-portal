@@ -626,6 +626,28 @@ export default async function handler(req, res) {
   const [first, ...rest] = enriched
   const isCustomerQuote  = subjectData.type === 'customer'
 
+  // For customer quotes, fold order-level discounts proportionally into item prices
+  // so the customer sees a single final price per product rather than a separate
+  // discount line. Dealer quotes keep the discount as a visible breakdown line.
+  let discountsForLineItems = discounts
+  if (isCustomerQuote && discounts.length > 0) {
+    const totalDiscount = discounts.reduce((s, d) => s + Math.abs(d.net_price || 0), 0)
+    const allOrderItems = [...skuItems, ...manualItems]
+    const subtotal      = allOrderItems.reduce((s, i) => s + (i.net_price || 0) * (i.quantity || 1), 0)
+    if (subtotal > 0 && totalDiscount > 0 && totalDiscount < subtotal) {
+      const ratio = totalDiscount / subtotal
+      skuItems.forEach(item => {
+        item.net_price = Math.round(item.net_price * (1 - ratio))
+      })
+      manualItems.forEach(item => {
+        item.net_price  = Math.round(item.net_price  * (1 - ratio))
+        item.gross_price = item.net_price
+      })
+      console.log(`[parse-email] Customer quote: folded discount of ${totalDiscount} kr into item prices (ratio=${(ratio*100).toFixed(1)}%)`)
+    }
+    discountsForLineItems = []  // no separate discount line in customer view
+  }
+
   function buildProduct(item) {
     const s = item.shopify
     return {
@@ -670,7 +692,7 @@ export default async function handler(req, res) {
     })
   }
 
-  discounts.forEach(d => line_items.push(d))
+  discountsForLineItems.forEach(d => line_items.push(d))
 
   // ── 5. Accessories — live Shopify recommendations, static fallback ────────
   // Collect SKUs already in the quote so we can exclude them from suggestions

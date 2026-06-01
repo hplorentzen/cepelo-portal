@@ -128,11 +128,14 @@ function ProductStrip({ mainProduct, lineItems }) {
 // Success screen
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SuccessScreen({ result, dealerEmail }) {
+function SuccessScreen({ result, dealerEmail, quoteType }) {
+  const isCustomer = quoteType === 'customer'
   return (
     <div className="success-wrap">
       <div className="success-icon">✓</div>
-      <h2 className="success-title">Tilbud sendt til forhandler</h2>
+      <h2 className="success-title">
+        {isCustomer ? 'Tilbud sendt til slutkunde' : 'Tilbud sendt til forhandler'}
+      </h2>
       <p className="success-sub">Tilbuddet er nu sendt til <strong>{dealerEmail}</strong>.</p>
       <div className="success-links">
         <a href={result.dealer_url} className="success-link-btn" target="_blank" rel="noopener noreferrer">
@@ -354,7 +357,7 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         <ProductStrip mainProduct={quote.main_product} lineItems={quote.line_items} />
 
         {submitted ? (
-          <SuccessScreen result={submitted} dealerEmail={dealerEmail} />
+          <SuccessScreen result={submitted} dealerEmail={dealerEmail} quoteType={quoteType} />
         ) : (
           <form onSubmit={handleSubmit}>
             <div className="form-sections">
