@@ -284,7 +284,8 @@ export default function QuotePage({ quote }) {
                   />
                 : null
             )}
-            <div className="tagline">{tr.tagline}</div>
+            {/* Tagline only shown in dealer view */}
+            {isDealer && <div className="tagline">{tr.tagline}</div>}
             {isDealer && quote.dealer_name && (
               <div className="header-dealer">
                 <strong>{quote.dealer_name}</strong>
