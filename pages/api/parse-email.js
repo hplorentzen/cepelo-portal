@@ -579,36 +579,29 @@ export default async function handler(req, res) {
       .join(' ')
   }
 
-  // ── 1. Parse subject → extract quote_ref, type, recipient ─────────────────
-  console.log('[parse-email] raw subject:', JSON.stringify(subject.slice(0, 200)))
-
+  // ── 1. Parse subject → extract quote_ref and recipient_company ─────────────
+  // Quote type (dealer vs customer) is NOT determined here.
+  // The CEPELO seller sets it in the seller form before the quote is sent.
+  // parse-email always stores type='dealer' as a neutral default.
   const subjectData = parseSubject(subject)
-  console.log('[parse-email] parseSubject result: type=', subjectData.type,
-    'ref=', subjectData.quote_ref, 'company=', subjectData.recipient_company)
+  subjectData.type  = 'dealer'   // definitive type set later by seller form
 
-  // Fallback: try to extract quote ref from body HTML
+  console.log('[parse-email] ref=', subjectData.quote_ref,
+    'company=', subjectData.recipient_company)
+
+  // Fallback: extract quote ref from body HTML when subject had none
   if (!subjectData.quote_ref) {
     const rawHtml = (body_html || html_field || '')
       .replace(/&nbsp;/g, ' ').replace(/&#160;/g, ' ')
     subjectData.quote_ref = parseQuoteRef(rawHtml)
   }
 
-  // Fallback: always re-check body HTML for SLUTKUNDE marker, regardless of whether
-  // parseSubject already found a recipient_company.  This prevents a FORHANDLER
-  // subject-line match from silently locking type='dealer' when the email is actually
-  // a customer (SLUTKUNDE) quote.
-  const bodyText = stripTags(body_html || html_field || '').slice(0, 400)
-  const dealerM  = bodyText.match(/FORHANDLER\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
-  const custM    = bodyText.match(/SLUTKUNDE\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
-  if (custM) {
-    // SLUTKUNDE in body wins unconditionally — it is the definitive signal
-    subjectData.type = 'customer'
-    if (!subjectData.recipient_company) subjectData.recipient_company = custM[1].trim()
-  } else if (dealerM && !subjectData.recipient_company) {
-    subjectData.type = 'dealer'
-    subjectData.recipient_company = dealerM[1].trim()
+  // Fallback: extract recipient_company from body if subject gave no match
+  if (!subjectData.recipient_company) {
+    const bodyText = stripTags(body_html || html_field || '').slice(0, 400)
+    const m = bodyText.match(/(?:FORHANDLER|SLUTKUNDE)\s*\|[^:]*:\s*(.+?)\s*[-–\n]/i)
+    if (m) subjectData.recipient_company = m[1].trim()
   }
-  console.log('[parse-email] final type=', subjectData.type, '(after body fallback)')
 
   // ── 2. Get line items – Admin API primary, HTML fallback ──────────────────
   let items  = null
@@ -619,7 +612,7 @@ export default async function handler(req, res) {
     try {
       const draftOrder = await fetchDraftOrderByRef(subjectData.quote_ref)
       if (draftOrder) {
-        items  = buildItemsFromDraftOrder(draftOrder, subjectData.type === 'customer')
+        items  = buildItemsFromDraftOrder(draftOrder, false)
         source = 'shopify_admin_api'
         console.log(`[parse-email] Loaded ${subjectData.quote_ref} from Shopify Admin API`)
       } else {
@@ -674,16 +667,15 @@ export default async function handler(req, res) {
   }
 
   // ── 3. Shopify Storefront enrichment (images, descriptions, gross_price) ──
-  // isCustomerQuote must be known here so fetchProductBySku can skip the
-  // vejl_udsalgspris metafield override (which would clobber the discount-
-  // adjusted gross_price we already computed in buildItemsFromDraftOrder).
-  const isCustomerQuote = subjectData.type === 'customer'
-
+  // Always enriched as a dealer quote: gross_price comes from the vejl_udsalgspris
+  // metafield (retail price), net_price from the draft order.
+  // If the seller later sets type=customer in the seller form, submit-seller-form
+  // recalculates gross_price = net_price for all items at that point.
   const enriched = await Promise.all(
     skuItems.map(async item => {
       let shopify = null
       try {
-        shopify = await fetchProductBySku(item.sku, isCustomerQuote)
+        shopify = await fetchProductBySku(item.sku)
         if (!shopify) console.warn(`[parse-email] SKU ${item.sku} not found in Shopify Storefront`)
       } catch (e) {
         console.warn(`[parse-email] Storefront error for ${item.sku}:`, e.message)
@@ -694,11 +686,6 @@ export default async function handler(req, res) {
 
   // ── 4. Build main_product + line_items ───────────────────────────────────
   const [first, ...rest] = enriched
-
-  // For customer quotes the discount is already reflected in item.shopify_price
-  // (Shopify stores the final custom/agreed price in item.price directly).
-  // Don't show discounts as separate line items in the customer-facing view.
-  const discountsForLineItems = isCustomerQuote ? [] : discounts
 
   function buildProduct(item) {
     const s = item.shopify
@@ -719,12 +706,8 @@ export default async function handler(req, res) {
       sku:         item.sku,
       name:        s?.name || item.name,
       quantity:    item.quantity,
-      net_price:   isCustomerQuote ? 0 : item.net_price,
-      // Customer quotes: net_price = item.price − item.applied_discount.amount / qty,
-      // which already reflects any line-level discount (e.g. 66995 − 31095 = 35900).
-      // Order-level discount is handled proportionally via shopify_price when present,
-      // but net_price is the authoritative final price for line-discount orders.
-      gross_price: isCustomerQuote ? item.net_price : (s?.gross_price || 0),
+      net_price:   item.net_price,
+      gross_price: s?.gross_price || 0,   // vejl metafield retail price (dealer default)
     }
   }
 
@@ -736,8 +719,8 @@ export default async function handler(req, res) {
     sku:         null,
     name:        item.name,
     quantity:    item.quantity,
-    net_price:   isCustomerQuote ? 0              : item.net_price,
-    gross_price: isCustomerQuote ? item.net_price : item.gross_price,
+    net_price:   item.net_price,
+    gross_price: item.gross_price,
     type:        'manual',
   }))
 
@@ -748,7 +731,7 @@ export default async function handler(req, res) {
     })
   }
 
-  discountsForLineItems.forEach(d => line_items.push(d))
+  discounts.forEach(d => line_items.push(d))
 
   // ── 5. Accessories — live Shopify recommendations, static fallback ────────
   // Collect SKUs already in the quote so we can exclude them from suggestions

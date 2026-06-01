@@ -63,8 +63,30 @@ export default async function handler(req, res) {
     return res.status(409).json({ error: 'Quote has already been submitted', status: quote.status })
   }
 
-  // ── 2. Optionally update agreed gross price on main product ───────────────
-  let mainProduct = quote.main_product || {}
+  // ── 2. Apply pricing based on quote type ──────────────────────────────────
+  //
+  // parse-email always stores dealer pricing (gross_price = vejl metafield
+  // retail price, net_price = draft-order discounted price).
+  //
+  // When the seller sets type=customer here, we recalculate:
+  //   gross_price = net_price   (the agreed draft-order price the customer pays)
+  //   net_price   = 0           (not shown to end customers)
+  //
+  // Discount and delivery line items are left untouched.
+  let mainProduct = quote.main_product ? { ...quote.main_product } : {}
+  let lineItems   = [...(quote.line_items || [])]
+
+  if (type === 'customer') {
+    const toCustomerPrice = item => {
+      if (!item) return item
+      if (item.type === 'discount' || item.sku === 'DELIVERY') return item
+      return { ...item, gross_price: item.net_price || item.gross_price, net_price: 0 }
+    }
+    mainProduct = toCustomerPrice(mainProduct)
+    lineItems   = lineItems.map(toCustomerPrice)
+  }
+
+  // Optional agreed-price override (applied on top of type-based recalculation)
   const agreedNum = agreed_price ? parsePrice(String(agreed_price)) : 0
   if (agreedNum > 0) {
     mainProduct = { ...mainProduct, gross_price: agreedNum }
@@ -93,6 +115,7 @@ export default async function handler(req, res) {
       recipient_email:   recipient_email   || '',
       recipient_phone:   recipient_phone   || '',
       main_product:      mainProduct,
+      line_items:        lineItems,
       notes:             fullNotes,
     })
     .eq('draft_token', draft_token)
@@ -109,7 +132,7 @@ export default async function handler(req, res) {
   // ── 5. Email the dealer ────────────────────────────────────────────────────
   const allProducts = [
     mainProduct,
-    ...(quote.line_items || []).filter(i => i.sku !== 'DELIVERY'),
+    ...lineItems.filter(i => i.sku !== 'DELIVERY'),
   ].filter(Boolean)
 
   const emailUrl = type === 'customer' ? customerUrl : quoteUrl
