@@ -7,6 +7,14 @@ import { calcLeasing } from '../../lib/leasing'
 import { getDealerInfo } from '../../lib/dealers'
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Diagnostic product detection — keywords that indicate an Autel/diagnose quote
+const DIAG_KEYWORDS = ['MS909','MS919','Ultra','IM508','IM608','Elite','909CV','MX900','DS900','906PRO','Autel']
+function _hasDiagKeyword(str) {
+  if (!str) return false
+  const s = str.toLowerCase()
+  return s.includes('diagnos') || s.includes('autodiag') ||
+    DIAG_KEYWORDS.some(k => s.includes(k.toLowerCase()))
+}
 
 export default function QuotePage({ quote }) {
   const lang     = quote?.lang || 'da'
@@ -138,9 +146,15 @@ export default function QuotePage({ quote }) {
     }
   }
 
-  // Is this an Autodiagnose quote? Used for software update section (issue #11)
-  const isAutodiagnose = quote.category === 'Autodiagnose' ||
-    (quote.main_product?.product_type || '').toLowerCase().includes('diagnos')
+  // Is this an Autodiagnose quote? Checked across category, product_type, name, and SKU
+  const _allItems = [quote.main_product, ...(quote.line_items || [])].filter(Boolean)
+  const isAutodiagnose =
+    quote.category === 'Autodiagnose' ||
+    _allItems.some(p =>
+      _hasDiagKeyword(p.product_type) ||
+      _hasDiagKeyword(typeof p.name === 'object' ? (p.name.da || p.name.en || '') : (p.name || '')) ||
+      _hasDiagKeyword(p.sku)
+    )
 
   // Dealer branding — available in both dealer and customer views
   const dealerInfo    = getDealerInfo(quote.dealer_email)
@@ -354,6 +368,11 @@ export default function QuotePage({ quote }) {
         .software-update-icon{font-size:20px;flex-shrink:0}
         .software-update-title{font-family:'Montserrat',sans-serif;font-size:11px;font-weight:700;color:var(--orange);letter-spacing:.06em;text-transform:uppercase;margin-bottom:2px}
         .software-update-sub{font-size:12px;color:var(--ink-light)}
+        .sw-info-box{display:flex;align-items:flex-start;gap:12px;background:#e0f0fa;border-radius:10px;padding:14px 18px;margin-bottom:20px}
+        .sw-info-icon{font-size:18px;flex-shrink:0;line-height:1.5}
+        .sw-info-text{font-size:13px;color:#173454;line-height:1.65}
+        .sw-info-link{color:#0868B2;font-weight:600;text-decoration:none;white-space:nowrap}
+        .sw-info-link:hover{text-decoration:underline}
         .acc-section{margin-top:20px;margin-bottom:20px}
         .acc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:12px}
         .acc-card{background:var(--white);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s;display:flex;align-items:flex-start;gap:10px}
@@ -736,6 +755,27 @@ export default function QuotePage({ quote }) {
               ))}
             </div>
           </>
+        )}
+
+        {/* ── Software update info box — diagnostic products only ────────────── */}
+        {isAutodiagnose && (
+          <div className="sw-info-box">
+            <span className="sw-info-icon">ℹ️</span>
+            <div className="sw-info-text">
+              Prisen inkluderer 2 års softwareopdateringer og teknisk support.
+              For MS909, MS919 og MS Ultra er SGW Secure Gateway adgang også inkluderet i de første 2 år.
+              {' '}
+              <a
+                href="https://cepelo.dk/pages/teknisk-support-remote-expert"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="sw-info-link"
+                onClick={e => e.stopPropagation()}
+              >
+                Læs mere om support og opdateringer →
+              </a>
+            </div>
+          </div>
         )}
 
         {/* ── Accessories grid ───────────────────────────────────────────────── */}
