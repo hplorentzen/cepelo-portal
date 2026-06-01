@@ -31,7 +31,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes }  from 'crypto'
 import { fetchProductBySku, fetchDraftOrderByRef, fetchProductRecommendations } from '../../lib/shopify'
-import { getAccessoriesForSku } from '../../lib/accessories'
 import { sendEmail, sellerNotificationEmail } from '../../lib/email'
 import { getSellerByEmail } from '../../lib/sellers'
 
@@ -686,14 +685,17 @@ export default async function handler(req, res) {
     try {
       const recs = await fetchProductRecommendations(mainProductGid)
       available_accessories = recs.filter(r => r.sku && !quotedSkus.has(r.sku))
-      console.log(`[parse-email] Shopify recommendations: ${recs.length} total, ${available_accessories.length} after dedup`)
+      console.log(`[parse-email] Shopify recommendations: ${recs.length} raw → ${available_accessories.length} after dedup. GID=${mainProductGid}`)
+      if (available_accessories.length === 0) {
+        console.log('[parse-email] No recommendations returned by Shopify — accessories section will be empty')
+      }
     } catch (e) {
-      console.warn('[parse-email] Product recommendations fetch failed, falling back to static accessories:', e.message)
-      available_accessories = getAccessoriesForSku(first.sku)
+      console.warn('[parse-email] fetchProductRecommendations failed — accessories will be empty:', e.message)
+      // No fallback to fake/static accessories per product spec
     }
   } else {
-    console.log('[parse-email] No shopify_product_id on main product — using static accessories')
-    available_accessories = getAccessoriesForSku(first.sku)
+    console.log('[parse-email] No shopify_product_id on main product — accessories will be empty')
+    // No fallback to fake/static accessories per product spec
   }
 
   // ── 6. Parsed summary ─────────────────────────────────────────────────────
