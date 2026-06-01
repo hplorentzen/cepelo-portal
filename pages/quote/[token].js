@@ -22,6 +22,9 @@ export default function QuotePage({ quote }) {
   const [selectedAccessories, setSelectedAccessories] = useState([])
   // Dealer editable note — local state only, used in mailto (issue #13)
   const [dealerNote, setDealerNote] = useState('')
+  // Acceptance flow
+  const [accepted,       setAccepted]       = useState(false)
+  const [acceptLoading,  setAcceptLoading]  = useState(false)
 
   useEffect(() => {
     // Dealer view: match by token; Customer view: match by customer_token
@@ -111,14 +114,25 @@ export default function QuotePage({ quote }) {
   }
 
   const handleAccept = async () => {
-    await supabase.from('quotes')
-      .update({ accepted_at: new Date().toISOString(), status: 'accepted' })
-      .eq('customer_token', quote.customer_token)
-    alert(
-      lang === 'no' ? 'Tilbudet er akseptert!' :
-      lang === 'is' ? 'Tilboðið hefur verið samþykkt!' :
-      'Tilbuddet er accepteret!'
-    )
+    if (acceptLoading) return
+    setAcceptLoading(true)
+    try {
+      const res = await fetch('/api/accept-quote', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          customer_token:       quote.customer_token,
+          selected_accessories: selectedAccessories,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setAccepted(true)
+    } catch (e) {
+      console.error('[accept] failed:', e)
+      alert('Noget gik galt – prøv igen eller kontakt CEPELO direkte.')
+    } finally {
+      setAcceptLoading(false)
+    }
   }
 
   // Is this an Autodiagnose quote? Used for software update section (issue #11)
@@ -132,6 +146,119 @@ export default function QuotePage({ quote }) {
   // Shopify ref for display (hide placeholder value 'PARSED')
   const shopifyRef = quote.shopify_order_id && quote.shopify_order_id !== 'PARSED'
     ? quote.shopify_order_id : null
+
+  // ── Confirmation page (shown after customer accepts) ────────────────────────
+  if (accepted) {
+    const confirmedProducts = [
+      ...(quote.main_product ? [quote.main_product] : []),
+      ...(quote.line_items   || []).filter(i => !['subscription','manual'].includes(i.type)),
+      ...selectedAccessories,
+    ]
+    const grossTotal = confirmedProducts.reduce((s, p) => s + ((p.gross_price || 0) * (p.quantity || 1)), 0)
+    const vatAmt     = Math.round(grossTotal * 0.25)
+    const inclVat    = grossTotal + vatAmt
+
+    return (
+      <>
+        <Head>
+          <title>Ordre bekræftet – CEPELO</title>
+          <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet" />
+        </Head>
+        <style>{`
+          *{box-sizing:border-box;margin:0;padding:0}
+          body{font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;background:#F5F5F6;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+          .conf-card{background:#fff;border-radius:16px;border:1px solid #E0E0E4;max-width:560px;width:100%;overflow:hidden}
+          .conf-header{background:#fff;padding:20px 32px;border-bottom:1px solid #E0E0E4;display:flex;align-items:center;justify-content:space-between}
+          .conf-bar{background:#173454;padding:10px 32px}
+          .conf-bar span{color:rgba(255,255,255,.75);font-family:Montserrat,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.1em;font-weight:600}
+          .conf-body{padding:40px 32px}
+          .conf-check{width:64px;height:64px;border-radius:50%;background:#E8F3FC;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;font-size:30px;color:#0868B2}
+          .conf-headline{font-family:Montserrat,sans-serif;font-size:24px;font-weight:800;color:#173454;text-align:center;margin-bottom:12px}
+          .conf-sub{font-size:14px;color:#767686;line-height:1.7;text-align:center;max-width:400px;margin:0 auto 32px}
+          .conf-divider{height:1px;background:#E0E0E4;margin:28px 0}
+          .conf-section-label{font-family:Montserrat,sans-serif;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#0868B2;font-weight:700;margin-bottom:14px}
+          .conf-product{display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-bottom:1px solid #F0F0F2;font-size:14px;color:#323232}
+          .conf-product:last-child{border-bottom:none}
+          .conf-product-name{font-weight:600;color:#173454}
+          .conf-product-price{color:#767686;white-space:nowrap;margin-left:12px}
+          .conf-total-row{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;font-size:14px;color:#767686}
+          .conf-total-row.main{font-family:Montserrat,sans-serif;font-size:17px;font-weight:800;color:#173454;padding-top:12px}
+          .conf-contact{background:#F5F5F6;border-radius:10px;padding:16px 20px;font-size:13px;color:#323232;line-height:1.8}
+          .conf-footer{padding:16px 32px;border-top:1px solid #E0E0E4;font-size:11px;color:#767686;text-align:center}
+        `}</style>
+        <div className="conf-card">
+          {/* Header */}
+          <div className="conf-header">
+            <img src="https://cepelo.dk/cdn/shop/files/Cepelo-blaa-uden-tools.webp" alt="CEPELO" width="120" style={{display:'block',height:'auto'}} />
+            {dealerLogoUrl && <img src={dealerLogoUrl} alt="" style={{display:'block',height:28,maxWidth:100,objectFit:'contain'}} />}
+          </div>
+          <div className="conf-bar"><span>Vi sikrer fremtidens værksted</span></div>
+
+          {/* Body */}
+          <div className="conf-body">
+            <div className="conf-check">✓</div>
+            <div className="conf-headline">Tak for din ordre! 🎉</div>
+            <div className="conf-sub">
+              Vi glæder os til at levere dit nye udstyr.<br />
+              Du vil snart blive kontaktet vedrørende levering og installation.
+            </div>
+
+            {/* Product summary */}
+            {confirmedProducts.length > 0 && (
+              <>
+                <div className="conf-section-label">Bestilte produkter</div>
+                <div style={{marginBottom:20}}>
+                  {confirmedProducts.map((p, i) => {
+                    const name  = typeof p.name === 'object' ? (p.name[lang] || p.name.da || p.sku) : (p.name || p.sku)
+                    const price = (p.gross_price || 0) * (p.quantity || 1)
+                    return (
+                      <div key={i} className="conf-product">
+                        <span className="conf-product-name">
+                          {name}{p.quantity > 1 ? <span style={{fontWeight:400,color:'#767686'}}> × {p.quantity}</span> : null}
+                        </span>
+                        {price > 0 && <span className="conf-product-price">{Math.round(price).toLocaleString('da-DK')} kr</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Totals */}
+                <div style={{borderTop:'2px solid #E0E0E4',paddingTop:12}}>
+                  <div className="conf-total-row">
+                    <span>Subtotal ekskl. moms</span>
+                    <span>{grossTotal.toLocaleString('da-DK')} kr</span>
+                  </div>
+                  <div className="conf-total-row">
+                    <span>Moms (25%)</span>
+                    <span>{vatAmt.toLocaleString('da-DK')} kr</span>
+                  </div>
+                  <div className="conf-total-row main">
+                    <span>Total inkl. moms</span>
+                    <span>{inclVat.toLocaleString('da-DK')} kr</span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div className="conf-divider" />
+
+            {/* CEPELO contact */}
+            <div className="conf-section-label">CEPELO kontakt</div>
+            <div className="conf-contact">
+              <strong>CEPELO A/S</strong><br />
+              Nibevej 54, 9200 Aalborg SV<br />
+              +45 98 18 09 00<br />
+              <a href="mailto:info@cepelo.dk" style={{color:'#0868B2',textDecoration:'none'}}>info@cepelo.dk</a>
+              {' · '}
+              <a href="https://cepelo.dk" style={{color:'#0868B2',textDecoration:'none'}}>cepelo.dk</a>
+            </div>
+          </div>
+
+          <div className="conf-footer">CEPELO A/S · Nibevej 54, 9200 Aalborg SV · +45 98 18 09 00</div>
+        </div>
+      </>
+    )
+  }
 
   return (
     <>
@@ -740,7 +867,9 @@ export default function QuotePage({ quote }) {
         {!isDealer && (
           <div className="customer-action no-print">
             <p>{tr.contactText} <strong>{quote.sender_name || quote.dealer_name || 'CEPELO'}</strong> · {quote.sender_email}</p>
-            <button className="accept-btn" onClick={handleAccept}>✓ {tr.acceptQuote}</button>
+            <button className="accept-btn" onClick={handleAccept} disabled={acceptLoading} style={acceptLoading ? {opacity:.7,cursor:'wait'} : {}}>
+              {acceptLoading ? '…' : `✓ ${tr.acceptQuote}`}
+            </button>
           </div>
         )}
 
