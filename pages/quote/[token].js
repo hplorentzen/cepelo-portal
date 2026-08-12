@@ -591,6 +591,11 @@ export default function QuotePage({ quote }) {
                       <>{' '}<a href={`https://cepelo.dk/products/${item.shopify_handle}`} target="_blank" rel="noopener noreferrer" style={{color:'var(--blue)',textDecoration:'none',whiteSpace:'nowrap'}}>Læs mere →</a></>
                     )}
                   </div>
+                  {item.bundle_label && (
+                    <div style={{marginTop:8,fontSize:12,color:'var(--ink-muted)',fontStyle:'italic'}}>
+                      {item.bundle_label}
+                    </div>
+                  )}
                   {/* Video thumbnail card */}
                   {item.video_url && (
                     <a href={item.video_url} target="_blank" rel="noopener noreferrer" className="product-video">

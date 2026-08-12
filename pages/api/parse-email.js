@@ -30,7 +30,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes }  from 'crypto'
-import { fetchProductBySku, fetchDraftOrderByRef, fetchAccessoriesFromMetafields } from '../../lib/shopify'
+import { fetchProductBySku, fetchProductByTitle, fetchDraftOrderByRef, fetchAccessoriesFromMetafields } from '../../lib/shopify'
 import { sendEmail, sellerNotificationEmail } from '../../lib/email'
 import { getSellerByEmail } from '../../lib/sellers'
 
@@ -446,6 +446,7 @@ function buildItemsFromEmail(emailHtml, debugCollector = null) {
 
 function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
   const skuItems    = []
+  const bundleItems = []
   const manualItems = []
   const discounts   = []
   let   delivery    = null
@@ -522,19 +523,26 @@ function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
         'finalUnitPrice=', shopify_price)
     }
 
-    const hasSku = item.sku && item.sku.trim() && !item.custom
+    const hasSku   = item.sku && item.sku.trim() && !item.custom
+    // Shopify Bundles app: real catalog product (custom=false) with no SKU on the bundle parent
+    const isBundle = !item.custom && (!item.sku || !item.sku.trim())
     if (hasSku) {
       skuItems.push({
         sku:          item.sku.trim().toUpperCase(),
         name:         item.title || item.sku,
         quantity:     qty,
         net_price,
-        // shopify_price = post-order-discount unit price for customer quotes;
-        // equals item.price (no adjustment) for dealer quotes.
         shopify_price,
-        // Preserve bundle-related fields for downstream processing
-        _properties:          item.properties         || [],
+        _properties:           item.properties          || [],
         _line_item_components: item.line_item_components || null,
+      })
+    } else if (isBundle) {
+      bundleItems.push({
+        sku:          null,
+        name:         item.title,
+        quantity:     qty,
+        net_price,
+        shopify_price,
       })
     } else {
       manualItems.push({
@@ -564,7 +572,7 @@ function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
   const address = { company: dealerName, address: addrParts.join(', ') }
 
   // raw_line_items is returned so debug mode can include the full Shopify payload
-  return { skuItems, manualItems, delivery, discounts, address,
+  return { skuItems, bundleItems, manualItems, delivery, discounts, address,
     raw_line_items: draftOrder.line_items || [], debugCollector: null }
 }
 
@@ -684,14 +692,14 @@ export default async function handler(req, res) {
     console.log(`[parse-email] Using HTML fallback for ${subjectData.quote_ref || '(no ref)'}`)
   }
 
-  const { skuItems, manualItems, delivery, discounts, address, raw_line_items, debugCollector } = items
+  const { skuItems, bundleItems, manualItems, delivery, discounts, address, raw_line_items, debugCollector } = items
 
-  if (skuItems.length === 0) {
+  if (skuItems.length === 0 && (bundleItems || []).length === 0) {
     return res.status(422).json({
-      error:  'No SKU line items found',
+      error:  'No SKU or bundle line items found',
       hint:   source === 'html_fallback'
         ? 'Ensure the email body contains "Varenummer: XXXXX" for each product'
-        : 'Ensure the draft order contains at least one catalog product with a SKU/variant',
+        : 'Ensure the draft order contains at least one catalog product with a SKU or a bundle product',
       source,
       subject: subjectData,
     })
@@ -715,11 +723,29 @@ export default async function handler(req, res) {
     })
   )
 
+  // Enrich bundle items (empty-SKU, non-custom draft order products) via title lookup
+  const enrichedBundles = await Promise.all(
+    (bundleItems || []).map(async item => {
+      let shopify = null
+      try {
+        shopify = await fetchProductByTitle(item.name)
+        if (!shopify) console.warn(`[parse-email] Bundle "${item.name}" not found in Shopify Storefront`)
+      } catch (e) {
+        console.warn(`[parse-email] Storefront error for bundle "${item.name}":`, e.message)
+      }
+      return { ...item, shopify, isBundleItem: true }
+    })
+  )
+
   // ── 4. Build main_product + line_items ───────────────────────────────────
-  const [first, ...rest] = enriched
+  const allEnriched = [...enriched, ...enrichedBundles]
+  const [first, ...rest] = allEnriched
 
   function buildProduct(item) {
-    const s = item.shopify
+    const s        = item.shopify
+    const isBundle = !!item.isBundleItem
+    // Extract "inkl. X" component note from bundle title for display
+    const inklM    = isBundle ? (s?.name || item.name || '').match(/inkl\.\s*(.+)/i) : null
     return {
       ...(s && {
         name:               s.name,
@@ -738,7 +764,10 @@ export default async function handler(req, res) {
       name:        s?.name || item.name,
       quantity:    item.quantity,
       net_price:   item.net_price,
-      gross_price: s?.gross_price || 0,   // vejl metafield retail price (dealer default)
+      // Bundles: fall back to draft-order net_price when no vejl metafield found
+      gross_price: s?.gross_price || (isBundle ? item.net_price : 0),
+      ...(isBundle && { type: 'bundle' }),
+      ...(inklM && { bundle_label: `Pakke inkl. ${inklM[1].trim()}` }),
     }
   }
 
@@ -796,12 +825,13 @@ export default async function handler(req, res) {
     delivery,
     address:            address.address,
     items: [
-      ...enriched.map(i => ({
+      ...allEnriched.map(i => ({
         sku:        i.sku,
         name:       i.shopify?.name || i.name,
         quantity:   i.quantity,
         net_price:  i.net_price,
         shopify_ok: !!i.shopify,
+        ...(i.isBundleItem && { type: 'bundle' }),
       })),
       ...manualItems.map(i => ({
         sku: null, name: i.name, quantity: i.quantity,
