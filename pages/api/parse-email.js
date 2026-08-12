@@ -453,6 +453,32 @@ function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
   // ── Log order-level discount so we can see where the discount lives ─────────
   console.log('[order-discount]', draftOrder.applied_discount)
 
+  // ── Bundle diagnostics: dump all raw line items so we can inspect fields ───
+  // This covers item.properties, item.line_item_components, item.requires_shipping
+  // and any other bundle-related fields Shopify may return.
+  console.log('[bundle-raw] draft order', draftOrder.name, '— line_items count:', (draftOrder.line_items || []).length)
+  for (const raw of (draftOrder.line_items || [])) {
+    const bundleIndicators = {
+      hasProperties:      Array.isArray(raw.properties) && raw.properties.length > 0,
+      hasComponents:      !!raw.line_item_components,
+      requiresShipping:   raw.requires_shipping,
+      custom:             raw.custom,
+      giftCard:           raw.gift_card,
+      propertiesCount:    Array.isArray(raw.properties) ? raw.properties.length : 0,
+    }
+    if (bundleIndicators.hasProperties || bundleIndicators.hasComponents) {
+      console.log('[bundle-raw] POSSIBLE BUNDLE — sku=', raw.sku, 'title=', raw.title)
+      console.log('[bundle-raw]   properties=', JSON.stringify(raw.properties))
+      console.log('[bundle-raw]   line_item_components=', JSON.stringify(raw.line_item_components))
+      console.log('[bundle-raw]   full item (excl. tax_lines)=',
+        JSON.stringify({ ...raw, tax_lines: undefined }))
+    } else {
+      console.log('[bundle-raw] item sku=', raw.sku, 'title=', raw.title,
+        'price=', raw.price, 'qty=', raw.quantity,
+        'indicators=', JSON.stringify(bundleIndicators))
+    }
+  }
+
   const od               = draftOrder.applied_discount
   const orderDiscountAmt = parseFloat(od?.amount || 0)
 
@@ -506,6 +532,9 @@ function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
         // shopify_price = post-order-discount unit price for customer quotes;
         // equals item.price (no adjustment) for dealer quotes.
         shopify_price,
+        // Preserve bundle-related fields for downstream processing
+        _properties:          item.properties         || [],
+        _line_item_components: item.line_item_components || null,
       })
     } else {
       manualItems.push({
@@ -534,7 +563,9 @@ function buildItemsFromDraftOrder(draftOrder, isCustomerQuote = false) {
     [sa.zip, sa.city].filter(Boolean).join(' '), sa.country].filter(Boolean)
   const address = { company: dealerName, address: addrParts.join(', ') }
 
-  return { skuItems, manualItems, delivery, discounts, address, debugCollector: null }
+  // raw_line_items is returned so debug mode can include the full Shopify payload
+  return { skuItems, manualItems, delivery, discounts, address,
+    raw_line_items: draftOrder.line_items || [], debugCollector: null }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -653,7 +684,7 @@ export default async function handler(req, res) {
     console.log(`[parse-email] Using HTML fallback for ${subjectData.quote_ref || '(no ref)'}`)
   }
 
-  const { skuItems, manualItems, delivery, discounts, address, debugCollector } = items
+  const { skuItems, manualItems, delivery, discounts, address, raw_line_items, debugCollector } = items
 
   if (skuItems.length === 0) {
     return res.status(422).json({
@@ -789,6 +820,11 @@ export default async function handler(req, res) {
     return res.status(200).json({
       debug:  true,
       source,
+      // Raw Shopify Admin API line items (only present when source === 'shopify_admin_api')
+      // Inspect this to see bundle fields: properties, line_item_components, requires_shipping, etc.
+      ...(raw_line_items && raw_line_items.length > 0 && {
+        raw_draft_order_line_items: raw_line_items,
+      }),
       // HTML fallback debug (only present when source === 'html_fallback')
       ...(debugCollector && {
         price_strategies: debugCollector.priceStrategies,
