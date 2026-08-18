@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Head from 'next/head'
 import { supabase } from '../../lib/supabase'
 import { getT } from '../../lib/translations'
@@ -35,6 +35,10 @@ export default function QuotePage({ quote }) {
   const [acceptLoading,  setAcceptLoading]  = useState(false)
   // PDF download
   const [pdfLoading,     setPdfLoading]     = useState(false)
+  // Price auto-save
+  const [saveStatus,    setSaveStatus]    = useState('idle') // 'idle' | 'saving' | 'saved' | 'error'
+  const saveTimerRef    = useRef(null)
+  const isFirstRender   = useRef(true)
 
   useEffect(() => {
     // Dealer view: match by token; Customer view: match by customer_token
@@ -43,6 +47,41 @@ export default function QuotePage({ quote }) {
     if (!key) return
     supabase.from('quotes').update({ opened_at: new Date().toISOString() }).eq(col, key).then(() => {})
   }, [quote?.token, quote?.customer_token])
+
+  // Persist dealer-edited gross prices to Supabase.
+  // lineGross values are TOTALS (unit price × quantity) — the API divides by qty.
+  async function savePrices() {
+    if (!isDealer || !quote?.token) return
+    setSaveStatus('saving')
+    try {
+      const res = await fetch('/api/save-dealer-prices', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          token:      quote.token,
+          main_gross: parsePrice(mainGross),
+          line_gross: lineGross.map(v => parsePrice(v)),
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } catch (e) {
+      console.error('[save-prices]', e)
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    }
+  }
+
+  // Auto-save with 2 s debounce whenever prices change (skip initial mount)
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return }
+    if (!isDealer || !quote?.token) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    setSaveStatus('saving')
+    saveTimerRef.current = setTimeout(savePrices, 2000)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [mainGross, lineGross])
 
   if (!quote) return (
     <div style={{ fontFamily: 'sans-serif', padding: 40, textAlign: 'center', color: '#333' }}>
@@ -127,6 +166,9 @@ export default function QuotePage({ quote }) {
   // Download customer-facing PDF (gross prices only, dealer logo)
   const handleDownloadPdf = async () => {
     if (pdfLoading) return
+    // Cancel debounce and save immediately so PDF uses the latest prices
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    await savePrices()
     setPdfLoading(true)
     try {
       const res = await fetch(`/api/generate-pdf?token=${quote.token}`)
@@ -928,6 +970,10 @@ export default function QuotePage({ quote }) {
             <h3>{tr.forwardTitle}</h3>
             <p>{tr.forwardDesc}</p>
             <div className="tools-row">
+              {/* Save status indicator */}
+              {saveStatus === 'saving' && <span style={{fontSize:12,color:'var(--ink-muted)',alignSelf:'center'}}>Gemmer…</span>}
+              {saveStatus === 'saved'  && <span style={{fontSize:12,color:'var(--green)',fontWeight:600,alignSelf:'center'}}>✓ Gemt</span>}
+              {saveStatus === 'error'  && <span style={{fontSize:12,color:'#c62828',alignSelf:'center'}}>Fejl ved gem</span>}
               {/* Open quote again in new tab */}
               <a className="btn btn-secondary" href={`/quote/${quote.token}`} target="_blank" rel="noopener noreferrer">
                 ↗ Åbn tilbud igen
@@ -946,6 +992,7 @@ export default function QuotePage({ quote }) {
               <button
                 className="btn btn-primary"
                 onClick={() => {
+                  savePrices()  // fire-and-forget — prices persist before customer opens the link
                   const customerUrl = window.location.origin + '/quote/' + quote.customer_token
                   const recipientName = quote.recipient_company || quote.recipient_name || ''
                   const subject = encodeURIComponent(
