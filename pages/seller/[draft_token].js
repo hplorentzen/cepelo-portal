@@ -8,7 +8,7 @@
 //   CEPELO seller opens /seller/[draft_token] → fills in form → submits
 //   submit-seller-form → updates quote to 'sent' → emails dealer → syncs HubSpot
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import Head from 'next/head'
 import { formatPrice } from '../../lib/format'
 
@@ -123,47 +123,183 @@ function ProductStrip({ mainProduct, lineItems }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HubSpot deal picker combobox
+// HubSpot deal picker
 // ─────────────────────────────────────────────────────────────────────────────
 
-function DealPicker({ selectedId, onSelect, deals, loading, search, onSearchChange, newDealName, onNewDealName }) {
-  const [open, setOpen]  = useState(false)
-  const containerRef     = useRef(null)
-  const searchRef        = useRef(null)
+const PICKER_LABELS = {
+  appointmentscheduled:  'Ny/uafklaret',
+  qualifiedtobuy:        'Kvalificeret',
+  presentationscheduled: 'Behov afdækket',
+  decisionmakerboughtin: 'Tilbud sendt',
+  '5049481439':          'Tilbud gennemgået',
+  '5049481440':          'Forhandling',
+  closedwon:             'Lukket vundet',
+  closedlost:            'Lukket tabt',
+}
+
+function DealPicker({
+  allDeals, sellerOwnerId, dealerName, custCompany,
+  selectedId, onSelect, newDealName, onNewDealName,
+  loading, error, onRetry,
+}) {
+  const [open, setOpen]             = useState(false)
+  const [search, setSearch]         = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const containerRef = useRef(null)
+  const searchRef    = useRef(null)
+  const listRef      = useRef(null)
 
   // Close on click outside
   useEffect(() => {
     if (!open) return
-    function handleClick(e) {
+    const handle = e => {
       if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false)
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
   }, [open])
 
-  // Auto-focus search when dropdown opens
+  // Auto-focus search when dropdown opens; reset search on close
   useEffect(() => {
-    if (open) setTimeout(() => searchRef.current?.focus(), 50)
+    if (open) {
+      setTimeout(() => searchRef.current?.focus(), 30)
+    } else {
+      setSearch('')
+      setActiveIndex(0)
+    }
   }, [open])
 
-  const selectedDeal  = deals.find(d => d.id === selectedId)
-  const displayText   = selectedId === 'new'
-    ? '+ Opret ny deal'
-    : (selectedDeal?.name || (loading ? 'Henter deals…' : 'Vælg en deal…'))
-  const isNew         = selectedId === 'new'
+  // Sort deals by relevance: seller's own first, then name-match, then by date
+  const sortedDeals = useMemo(() => {
+    const matchWords = [dealerName, custCompany]
+      .filter(Boolean)
+      .flatMap(s => s.toLowerCase().split(/\s+/).filter(w => w.length > 2))
 
-  function pick(id) { onSelect(id); setOpen(false); onSearchChange('') }
+    return [...allDeals].sort((a, b) => {
+      const aOwn = sellerOwnerId && a.ownerId === sellerOwnerId ? 1 : 0
+      const bOwn = sellerOwnerId && b.ownerId === sellerOwnerId ? 1 : 0
+      if (bOwn !== aOwn) return bOwn - aOwn
+
+      if (matchWords.length) {
+        const aText = (a.name + ' ' + (a.companies || []).join(' ')).toLowerCase()
+        const bText = (b.name + ' ' + (b.companies || []).join(' ')).toLowerCase()
+        const diff  = matchWords.filter(w => bText.includes(w)).length
+                    - matchWords.filter(w => aText.includes(w)).length
+        if (diff !== 0) return diff
+      }
+
+      return new Date(b.lastModified || 0) - new Date(a.lastModified || 0)
+    })
+  }, [allDeals, sellerOwnerId, dealerName, custCompany])
+
+  // Filter by search — matches on dealname AND company name, partial word
+  const filteredDeals = useMemo(() => {
+    if (!search.trim()) return sortedDeals
+    const words = search.trim().toLowerCase().split(/\s+/)
+    return sortedDeals.filter(d => {
+      const text = (d.name + ' ' + (d.companies || []).join(' ')).toLowerCase()
+      return words.every(w => text.includes(w))
+    })
+  }, [sortedDeals, search])
+
+  // Scroll active item into view
+  useEffect(() => {
+    if (!listRef.current || activeIndex < 0) return
+    const items = listRef.current.querySelectorAll('[data-item]')
+    items[activeIndex]?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex])
+
+  const selectedDeal = allDeals.find(d => d.id === selectedId)
+  const isNew        = selectedId === 'new'
+  const noResults    = !loading && filteredDeals.length === 0
+
+  function pick(id) { onSelect(id); setOpen(false) }
+
+  function handleSearchKey(e) {
+    const total = filteredDeals.length + 1 // index 0 = "Opret ny deal"
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setActiveIndex(i => Math.min(i + 1, total - 1))
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setActiveIndex(i => Math.max(i - 1, 0))
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (activeIndex === 0) pick('new')
+        else if (filteredDeals[activeIndex - 1]) pick(filteredDeals[activeIndex - 1].id)
+        break
+      case 'Escape':
+        e.preventDefault()
+        setOpen(false)
+        break
+    }
+  }
 
   return (
     <div style={{ gridColumn: '1/-1' }}>
-      <div className="field field-full" style={{ borderBottom: isNew ? '1px solid var(--border)' : undefined }}>
-        <label className="field-label">HubSpot deal</label>
+      <div className="hs-help">Vælg den deal tilbuddet hører til, eller opret en ny.</div>
+
+      {error && (
+        <div className="hs-error">
+          ⚠ Kunne ikke hente deals fra HubSpot
+          <button type="button" className="hs-retry" onClick={onRetry}>Prøv igen</button>
+        </div>
+      )}
+
+      <div className="field field-full">
+        <label className="field-label">Deal <span className="req">*</span></label>
         <div className="dp-wrap" ref={containerRef}>
-          {/* Trigger */}
-          <div className="dp-trigger" onClick={() => setOpen(o => !o)}>
-            <span className={isNew ? 'dp-new-label' : ''}>{displayText}</span>
-            <span className="dp-chevron">{open ? '▴' : '▾'}</span>
-          </div>
+
+          {/* Closed state — show selected card or trigger */}
+          {!open && selectedId && !isNew && selectedDeal && (
+            <div className="dp-selected">
+              <div className="dp-sel-info">
+                <div className="dp-sel-name">{selectedDeal.name}</div>
+                <div className="dp-sel-meta">
+                  {(selectedDeal.companies || []).length > 0 && (
+                    <span className="dp-company">{selectedDeal.companies[0]}</span>
+                  )}
+                  {selectedDeal.ownerName && selectedDeal.ownerName !== '—' && (
+                    <span>{selectedDeal.ownerName}</span>
+                  )}
+                  <span className="dp-stage">
+                    {PICKER_LABELS[selectedDeal.dealstage] || selectedDeal.dealstage || '—'}
+                  </span>
+                  {selectedDeal.amount != null && (
+                    <span>{Math.round(selectedDeal.amount).toLocaleString('da-DK')} kr</span>
+                  )}
+                </div>
+              </div>
+              <button type="button" className="dp-change" onClick={() => setOpen(true)}>
+                Skift deal
+              </button>
+            </div>
+          )}
+
+          {!open && isNew && (
+            <div className="dp-selected dp-selected-new">
+              <span className="dp-new-label">+ Opret ny deal</span>
+              <button type="button" className="dp-change" onClick={() => setOpen(true)}>Skift</button>
+            </div>
+          )}
+
+          {!open && !selectedId && (
+            <div
+              className="dp-trigger"
+              role="combobox"
+              tabIndex={0}
+              onClick={() => !loading && !error && setOpen(true)}
+              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && !loading && !error && setOpen(true)}
+            >
+              <span className="dp-placeholder">
+                {loading ? 'Henter deals fra HubSpot…' : 'Vælg en deal eller opret ny…'}
+              </span>
+              <span className="dp-chevron">{loading ? '…' : '▾'}</span>
+            </div>
+          )}
 
           {/* Dropdown */}
           {open && (
@@ -173,48 +309,63 @@ function DealPicker({ selectedId, onSelect, deals, loading, search, onSearchChan
                   ref={searchRef}
                   className="dp-search"
                   value={search}
-                  onChange={e => onSearchChange(e.target.value)}
-                  placeholder="Søg på dealnavn…"
+                  onChange={e => { setSearch(e.target.value); setActiveIndex(0) }}
+                  onKeyDown={handleSearchKey}
+                  placeholder="Søg på dealnavn eller virksomhed…"
+                  autoComplete="off"
                 />
               </div>
-              <div className="dp-list">
-                {loading && <div className="dp-empty">Henter…</div>}
-                {!loading && deals.length === 0 && !search && (
+              <div className="dp-list" ref={listRef}>
+
+                {/* Pinned "Opret ny deal" — always at top */}
+                <div
+                  data-item
+                  className={`dp-item dp-item-create${activeIndex === 0 ? ' dp-item-kb' : ''}${isNew ? ' dp-item-active' : ''}`}
+                  onClick={() => pick('new')}
+                >
+                  {noResults && search.trim()
+                    ? `+ Opret ny deal "${search.trim()}"`
+                    : '+ Opret ny deal'}
+                </div>
+
+                {loading && <div className="dp-empty">Henter deals…</div>}
+
+                {!loading && noResults && !search.trim() && (
                   <div className="dp-empty">Ingen åbne deals fundet</div>
                 )}
-                {!loading && deals.length === 0 && search && (
-                  <div className="dp-empty">Ingen resultater for &ldquo;{search}&rdquo;</div>
+                {!loading && noResults && search.trim() && (
+                  <div className="dp-empty">Ingen deals matcher &ldquo;{search}&rdquo;</div>
                 )}
-                {!loading && deals.map(d => (
+
+                {!loading && filteredDeals.map((d, idx) => (
                   <div
                     key={d.id}
-                    className={`dp-item${d.id === selectedId ? ' dp-item-active' : ''}`}
+                    data-item
+                    className={`dp-item${d.id === selectedId ? ' dp-item-active' : ''}${activeIndex === idx + 1 ? ' dp-item-kb' : ''}`}
                     onClick={() => pick(d.id)}
                   >
                     <div className="dp-item-name">{d.name}</div>
                     <div className="dp-item-meta">
-                      {d.ownerName !== '—' && <span>{d.ownerName}</span>}
-                      <span className="dp-stage">{d.stage}</span>
+                      {(d.companies || []).length > 0 && (
+                        <span className="dp-company">{d.companies[0]}</span>
+                      )}
+                      {d.ownerName && d.ownerName !== '—' && <span>{d.ownerName}</span>}
+                      <span className="dp-stage">
+                        {PICKER_LABELS[d.dealstage] || d.dealstage || '—'}
+                      </span>
                       {d.amount != null && (
                         <span>{Math.round(d.amount).toLocaleString('da-DK')} kr</span>
                       )}
                     </div>
                   </div>
                 ))}
-                {/* Always show "Opret ny deal" at the bottom */}
-                <div
-                  className={`dp-item dp-item-create${isNew ? ' dp-item-active' : ''}`}
-                  onClick={() => pick('new')}
-                >
-                  + Opret ny deal
-                </div>
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* New deal name field shown when "Opret ny deal" is selected */}
+      {/* New deal name input */}
       {isNew && (
         <div className="field field-full">
           <label className="field-label">Dealnavn <span className="req">*</span></label>
@@ -281,13 +432,13 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
   const [notes,       setNotes]       = useState('')
 
   // ── HubSpot deal picker state ─────────────────────────────────────────────
-  const [hsDeals,       setHsDeals]       = useState([])
-  const [hsLoading,     setHsLoading]     = useState(false)
-  const [hsSearch,      setHsSearch]      = useState('')
-  const [hsSelectedId,  setHsSelectedId]  = useState(null) // null = not yet loaded
-  const [hsNewDealName, setHsNewDealName] = useState('')
-  const hsSearchTimer   = useRef(null)
-  const hsInitialFetch  = useRef(false)
+  const [hsAllDeals,     setHsAllDeals]     = useState([])
+  const [hsSellerOwnerId,setHsSellerOwnerId]= useState(null)
+  const [hsLoading,      setHsLoading]      = useState(false)
+  const [hsError,        setHsError]        = useState(null)
+  const [hsSelectedId,   setHsSelectedId]   = useState(null) // null = not yet chosen
+  const [hsNewDealName,  setHsNewDealName]  = useState('')
+  const hsInitialFetch   = useRef(false)
 
   // ── Submit state ──────────────────────────────────────────────────────────
   const [submitting, setSubmitting] = useState(false)
@@ -297,41 +448,60 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
   const quoteRef = quote?.shopify_order_id && quote.shopify_order_id !== 'PARSED'
     ? quote.shopify_order_id : null
 
-  // ── Load initial HubSpot deals ────────────────────────────────────────────
-  function fetchHsDeals(search) {
+  // ── Load all HubSpot deals once ───────────────────────────────────────────
+  function fetchHsDeals() {
     setHsLoading(true)
-    const params = new URLSearchParams({
-      q:            search || '',
-      dealer:       dealerName,
-      customer:     custCompany,
-      seller_email: prefill?.sender_email || '',
-    })
+    setHsError(null)
+    const params = new URLSearchParams({ seller_email: prefill?.sender_email || '' })
     fetch(`/api/hubspot/deals?${params}`)
-      .then(r => r.json())
-      .then(data => {
-        const list = data.deals || []
-        setHsDeals(list)
-        // On first load: pre-select top deal if it has relevance score > 0,
-        // otherwise default to "Opret ny deal"
-        if (!hsInitialFetch.current) {
-          hsInitialFetch.current = true
-          if (list.length > 0 && list[0].score > 0) {
-            setHsSelectedId(list[0].id)
-          } else {
-            setHsSelectedId('new')
-          }
-        }
+      .then(r => {
+        if (!r.ok) throw new Error(`Serverfejl (${r.status})`)
+        return r.json()
       })
-      .catch(() => {
-        if (!hsInitialFetch.current) { hsInitialFetch.current = true; setHsSelectedId('new') }
+      .then(data => {
+        if (data.error && !data.deals?.length) throw new Error(data.error)
+        setHsAllDeals(data.deals || [])
+        setHsSellerOwnerId(data.sellerOwnerId || null)
+        hsInitialFetch.current = true
+      })
+      .catch(e => {
+        setHsError(e.message)
+        hsInitialFetch.current = true
       })
       .finally(() => setHsLoading(false))
   }
 
   useEffect(() => {
-    if (quote) fetchHsDeals('')
+    if (quote) fetchHsDeals()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ── Auto-select best matching deal after load ─────────────────────────────
+  useEffect(() => {
+    if (!hsAllDeals.length || hsSelectedId !== null) return
+    const matchWords = [dealerName, custCompany]
+      .filter(Boolean)
+      .flatMap(s => s.toLowerCase().split(/\s+/).filter(w => w.length > 2))
+
+    const best = [...hsAllDeals].sort((a, b) => {
+      const aOwn = hsSellerOwnerId && a.ownerId === hsSellerOwnerId ? 5 : 0
+      const bOwn = hsSellerOwnerId && b.ownerId === hsSellerOwnerId ? 5 : 0
+      if (bOwn !== aOwn) return bOwn - aOwn
+      const aText = (a.name + ' ' + (a.companies || []).join(' ')).toLowerCase()
+      const bText = (b.name + ' ' + (b.companies || []).join(' ')).toLowerCase()
+      return matchWords.filter(w => bText.includes(w)).length
+           - matchWords.filter(w => aText.includes(w)).length
+    })[0]
+
+    const isMatch = best && (
+      (hsSellerOwnerId && best.ownerId === hsSellerOwnerId) ||
+      (matchWords.length && matchWords.some(w =>
+        (best.name + ' ' + (best.companies || []).join(' ')).toLowerCase().includes(w)
+      ))
+    )
+    if (isMatch) setHsSelectedId(best.id)
+    // If no match, leave null — user must actively choose
+  }, [hsAllDeals, hsSellerOwnerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Default new-deal name follows dealer/customer + quote ref ─────────────
   useEffect(() => {
@@ -339,13 +509,6 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
     const company = dealerName.trim() || custCompany.trim() || 'Kunde'
     setHsNewDealName(`${company}${quoteRef ? ` – ${quoteRef}` : ''}`)
   }, [dealerName, custCompany, hsSelectedId, quoteRef])
-
-  // ── Debounced search ──────────────────────────────────────────────────────
-  function handleHsSearch(v) {
-    setHsSearch(v)
-    if (hsSearchTimer.current) clearTimeout(hsSearchTimer.current)
-    hsSearchTimer.current = setTimeout(() => fetchHsDeals(v), 300)
-  }
 
   // ── Not found ─────────────────────────────────────────────────────────────
   if (!quote) {
@@ -380,6 +543,7 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!dealerEmail.trim()) { setError('Email til forhandler er påkrævet'); return }
+    if (!hsSelectedId) { setError('Vælg en HubSpot deal eller klik "+ Opret ny deal"'); return }
     if (hsSelectedId === 'new' && !hsNewDealName.trim()) {
       setError('Angiv et navn til den nye HubSpot deal'); return
     }
@@ -485,26 +649,45 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         .radio-dot::after{content:'';width:6px;height:6px;border-radius:50%;background:currentColor;display:none}
         .radio-option.active .radio-dot::after{display:block}
 
+        /* HubSpot section helpers */
+        .hs-help{font-size:12px;color:var(--muted);padding:10px 24px 0;grid-column:1/-1;line-height:1.5}
+        .hs-error{display:flex;align-items:center;gap:12px;background:#fdecea;border:1px solid #f5c6c2;border-radius:8px;color:var(--red);font-size:13px;padding:10px 16px;margin:10px 24px 0;grid-column:1/-1}
+        .hs-retry{margin-left:auto;font-family:'Montserrat',sans-serif;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;background:var(--red);color:#fff;border:none;border-radius:20px;padding:5px 12px;cursor:pointer;flex-shrink:0}
+
         /* Deal picker */
         .dp-wrap{position:relative}
-        .dp-trigger{display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-size:14px;color:var(--navy);font-weight:600;padding:2px 0;user-select:none;min-height:22px}
-        .dp-new-label{color:var(--blue)}
+        .dp-trigger{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:2px 0;user-select:none;min-height:24px}
+        .dp-trigger:focus{outline:none}
+        .dp-placeholder{font-size:14px;color:#bbbbc8;font-weight:400}
         .dp-chevron{color:var(--muted);font-size:10px;margin-left:8px;flex-shrink:0}
-        .dp-dropdown{position:absolute;left:-24px;right:-24px;top:calc(100% + 6px);z-index:200;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.12);overflow:hidden}
+        /* Selected deal card */
+        .dp-selected{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0}
+        .dp-sel-info{min-width:0;flex:1}
+        .dp-sel-name{font-size:14px;font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .dp-sel-meta{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
+        .dp-sel-meta span{font-size:11px;color:var(--muted)}
+        .dp-change{font-family:'Montserrat',sans-serif;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--blue);background:var(--blue-light);border:none;border-radius:16px;padding:5px 12px;cursor:pointer;flex-shrink:0;white-space:nowrap}
+        .dp-change:hover{background:#d0e8f8}
+        .dp-selected-new{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0}
+        .dp-new-label{font-size:14px;font-weight:600;color:var(--blue)}
+        /* Dropdown */
+        .dp-dropdown{position:absolute;left:-24px;right:-24px;top:calc(100% + 8px);z-index:200;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.14);overflow:hidden}
         .dp-search-wrap{padding:10px 12px;border-bottom:1px solid var(--border)}
-        .dp-search{width:100%;border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px;outline:none;font-family:inherit;color:var(--navy);background:var(--paper)}
+        .dp-search{width:100%;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;font-family:inherit;color:var(--navy);background:var(--paper)}
         .dp-search:focus{border-color:var(--blue)}
-        .dp-list{max-height:260px;overflow-y:auto}
-        .dp-empty{padding:14px 14px;font-size:13px;color:var(--muted)}
+        .dp-list{max-height:400px;overflow-y:auto}
+        .dp-empty{padding:12px 14px;font-size:13px;color:var(--muted)}
         .dp-item{padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .1s}
         .dp-item:last-child{border-bottom:none}
-        .dp-item:hover{background:var(--blue-light)}
-        .dp-item-active{background:var(--blue-light)}
-        .dp-item-name{font-size:13px;font-weight:600;color:var(--navy);line-height:1.3}
+        .dp-item:hover,.dp-item-active{background:var(--blue-light)}
+        .dp-item-kb{background:#eaf3ff;outline:2px solid var(--blue);outline-offset:-2px}
+        .dp-item-name{font-size:13px;font-weight:700;color:var(--navy);line-height:1.3}
         .dp-item-meta{display:flex;gap:8px;margin-top:3px;flex-wrap:wrap;align-items:center}
         .dp-item-meta span{font-size:11px;color:var(--muted)}
+        .dp-company{font-weight:600;color:var(--ink) !important}
         .dp-stage{background:var(--paper);padding:1px 6px;border-radius:3px;font-size:11px;color:var(--muted)}
-        .dp-item-create{color:var(--blue);font-family:'Montserrat',sans-serif;font-size:12px;font-weight:700;letter-spacing:.04em}
+        .dp-item-create{color:var(--blue);font-family:'Montserrat',sans-serif;font-size:12px;font-weight:700;letter-spacing:.04em;position:sticky;top:0;background:#fff;z-index:1;border-bottom:2px solid var(--border) !important}
+        .dp-item-create:hover{background:var(--blue-light) !important}
 
         /* Submit area */
         .submit-area{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px}
@@ -635,17 +818,20 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
               </SectionCard>
 
               {/* ── Section 4: HubSpot deal ── */}
-              <SectionCard title="HubSpot deal">
+              <SectionCard title="HUBSPOT DEAL">
                 <div className="fields-grid">
                   <DealPicker
+                    allDeals={hsAllDeals}
+                    sellerOwnerId={hsSellerOwnerId}
+                    dealerName={dealerName}
+                    custCompany={custCompany}
                     selectedId={hsSelectedId}
                     onSelect={setHsSelectedId}
-                    deals={hsDeals}
-                    loading={hsLoading}
-                    search={hsSearch}
-                    onSearchChange={handleHsSearch}
                     newDealName={hsNewDealName}
                     onNewDealName={setHsNewDealName}
+                    loading={hsLoading}
+                    error={hsError}
+                    onRetry={fetchHsDeals}
                   />
                 </div>
               </SectionCard>
@@ -655,7 +841,11 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
             {/* Submit */}
             <div className="submit-area">
               {error && <div className="error-msg">⚠ {error}</div>}
-              <button type="submit" className="submit-btn" disabled={submitting}>
+              <button
+                type="submit"
+                className="submit-btn"
+                disabled={submitting || !hsSelectedId || (hsSelectedId === 'new' && !hsNewDealName.trim())}
+              >
                 {submitting ? 'Sender…' : quoteType === 'customer' ? 'Send tilbud til slutkunde →' : 'Send tilbud til forhandler →'}
               </button>
               <div className="submit-note">
