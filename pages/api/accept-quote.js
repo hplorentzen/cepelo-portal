@@ -18,6 +18,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { sendEmail, orderConfirmedDealerEmail, orderConfirmedSellerEmail } from '../../lib/email'
 import { getSellerByEmail } from '../../lib/sellers'
+import { noteQuoteAccepted } from '../../lib/hubspot'
 
 const adminClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -132,6 +133,16 @@ export default async function handler(req, res) {
     } catch (e) {
       console.error('[accept-quote] Seller email failed:', e.message)
     }
+  }
+
+  // HubSpot acceptance note (fire-and-forget — must not block the response)
+  if (quote.hubspot_deal_id) {
+    noteQuoteAccepted({
+      dealId:            quote.hubspot_deal_id,
+      quoteRef:          quote.shopify_order_id || '',
+      recipientName:     quote.recipient_name    || '',
+      recipientCompany:  quote.recipient_company || '',
+    }).catch(e => console.error('[accept-quote] HubSpot note failed:', e.message))
   }
 
   return res.status(200).json({ success: true, order_form_url: orderFormUrl })

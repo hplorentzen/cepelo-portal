@@ -24,6 +24,7 @@ import { createClient } from '@supabase/supabase-js'
 import { sendEmail, dealerQuoteEmail } from '../../lib/email'
 import { parsePrice } from '../../lib/format'
 import { getSellerByEmail } from '../../lib/sellers'
+import { syncQuoteOnSend } from '../../lib/hubspot'
 
 const adminClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -48,6 +49,10 @@ export default async function handler(req, res) {
     type          = 'dealer',
     agreed_price  = '',
     notes         = '',
+    // HubSpot deal selection (from seller form)
+    hubspot_deal_id,
+    hubspot_new_deal,
+    hubspot_new_deal_name,
   } = req.body
 
   if (!draft_token)  return res.status(400).json({ error: 'draft_token is required' })
@@ -204,6 +209,45 @@ export default async function handler(req, res) {
     console.error('[submit-seller-form] Dealer email failed:', emailErr.message)
     console.error('[submit-seller-form] Email error detail:', emailErr)
   }
+
+  // ── 6. HubSpot sync (fire-and-forget — must not block the response) ──────────
+  // Compute total net for the deal amount
+  const allItems   = [mainProduct, ...lineItems].filter(Boolean)
+  const totalNet   = allItems
+    .filter(i => i.sku !== 'DELIVERY' && i.type !== 'discount')
+    .reduce((s, i) => s + (i.net_price || 0) * (i.quantity || 1), 0)
+
+  syncQuoteOnSend({
+    dealId:          hubspot_new_deal ? null : (hubspot_deal_id || null),
+    isNewDeal:       !!hubspot_new_deal,
+    newDealName:     hubspot_new_deal_name || '',
+    quoteRef:        quote.shopify_order_id || '',
+    quoteToken:      quote.token,
+    senderEmail:     quote.sender_email || '',
+    type,
+    totalNet,
+    dealerName:      dealer_name || quote.dealer_name || '',
+    recipientCompany: recipient_company || '',
+    recipientEmail:  recipient_email   || '',
+    products:        allItems,
+    baseUrl:         baseUrl || '',
+    quoteUrl,
+    customerUrl,
+  })
+  .then(finalDealId => {
+    if (finalDealId) {
+      return adminClient.from('quotes')
+        .update({ hubspot_deal_id: finalDealId, hubspot_sync_error: null })
+        .eq('draft_token', draft_token)
+    }
+  })
+  .catch(e => {
+    console.error('[submit] HubSpot sync failed:', e.message)
+    adminClient.from('quotes')
+      .update({ hubspot_sync_error: e.message })
+      .eq('draft_token', draft_token)
+      .then(() => {})
+  })
 
   return res.status(200).json({
     success:       true,
