@@ -33,6 +33,8 @@ export default async function handler(req, res) {
 
     const companyNamesMap = await getDealCompanyNames(deals.map(d => d.id))
 
+    console.log(`[hubspot/deals] raw deals from HubSpot: ${deals.length}, owners: ${owners.length}`)
+
     const result = deals.map(d => ({
       id:           d.id,
       name:         d.properties?.dealname  || `Deal ${d.id}`,
@@ -46,6 +48,7 @@ export default async function handler(req, res) {
       lastModified: d.properties?.hs_lastmodifieddate || null,
     }))
 
+    console.log(`[hubspot/deals] returning ${result.length} deals, sellerOwnerId=${sellerOwner?.id || 'none'}`)
     return res.status(200).json({
       deals:         result,
       sellerOwnerId: sellerOwner ? String(sellerOwner.id) : null,

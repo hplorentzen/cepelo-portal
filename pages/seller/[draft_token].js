@@ -291,13 +291,13 @@ function DealPicker({
               className="dp-trigger"
               role="combobox"
               tabIndex={0}
-              onClick={() => !loading && !error && setOpen(true)}
-              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && !loading && !error && setOpen(true)}
+              onClick={() => !loading && setOpen(true)}
+              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && !loading && setOpen(true)}
             >
               <span className="dp-placeholder">
                 {loading ? 'Henter deals fra HubSpot…' : 'Vælg en deal eller opret ny…'}
               </span>
-              <span className="dp-chevron">{loading ? '…' : '▾'}</span>
+              <span className="dp-chevron">{loading ? '⋯' : '▾'}</span>
             </div>
           )}
 
@@ -460,11 +460,14 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
       })
       .then(data => {
         if (data.error && !data.deals?.length) throw new Error(data.error)
-        setHsAllDeals(data.deals || [])
+        const list = data.deals || []
+        console.log('[HubSpot] deals loaded:', list.length, 'sellerOwnerId:', data.sellerOwnerId)
+        setHsAllDeals(list)
         setHsSellerOwnerId(data.sellerOwnerId || null)
         hsInitialFetch.current = true
       })
       .catch(e => {
+        console.error('[HubSpot] fetch error:', e.message)
         setHsError(e.message)
         hsInitialFetch.current = true
       })
@@ -625,8 +628,8 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
 
         /* Form sections */
         .form-sections{display:flex;flex-direction:column;gap:20px;margin-bottom:28px}
-        .section-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-        .section-heading{font-family:'Montserrat',sans-serif;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);padding:16px 24px;border-bottom:1px solid var(--border);background:var(--paper)}
+        .section-card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:visible;position:relative}
+        .section-heading{font-family:'Montserrat',sans-serif;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);padding:16px 24px;border-bottom:1px solid var(--border);background:var(--paper);border-radius:11px 11px 0 0}
         .fields-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
         .field{padding:14px 24px;border-bottom:1px solid var(--border)}
         .field:last-child,.field:nth-last-child(2):nth-child(odd){border-bottom:none}
@@ -656,10 +659,10 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
 
         /* Deal picker */
         .dp-wrap{position:relative}
-        .dp-trigger{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:2px 0;user-select:none;min-height:24px}
-        .dp-trigger:focus{outline:none}
+        .dp-trigger{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;user-select:none;min-height:28px;border-bottom:1px solid var(--border);transition:border-color .15s}
+        .dp-trigger:hover,.dp-trigger:focus{outline:none;border-bottom-color:var(--blue)}
         .dp-placeholder{font-size:14px;color:#bbbbc8;font-weight:400}
-        .dp-chevron{color:var(--muted);font-size:10px;margin-left:8px;flex-shrink:0}
+        .dp-chevron{color:var(--muted);font-size:12px;margin-left:8px;flex-shrink:0;line-height:1}
         /* Selected deal card */
         .dp-selected{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0}
         .dp-sel-info{min-width:0;flex:1}
@@ -671,7 +674,7 @@ export default function SellerFormPage({ quote, draft_token, prefill }) {
         .dp-selected-new{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 0}
         .dp-new-label{font-size:14px;font-weight:600;color:var(--blue)}
         /* Dropdown */
-        .dp-dropdown{position:absolute;left:-24px;right:-24px;top:calc(100% + 8px);z-index:200;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.14);overflow:hidden}
+        .dp-dropdown{position:absolute;left:-24px;right:-24px;top:calc(100% + 8px);z-index:9999;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.14);overflow:hidden}
         .dp-search-wrap{padding:10px 12px;border-bottom:1px solid var(--border)}
         .dp-search{width:100%;border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;font-family:inherit;color:var(--navy);background:var(--paper)}
         .dp-search:focus{border-color:var(--blue)}
